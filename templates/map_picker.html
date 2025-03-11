@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VRP Location Picker</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <h2>VRP Location Picker</h2>
+            <div class="controls">
+                <a href="{{ url_for('index') }}" class="btn btn-text">← Back to Home</a>
+                <h3>Setup Instructions</h3>
+                <ol class="instructions">
+                    <li>First, select the warehouse location</li>
+                    <li>Then add multiple delivery locations</li>
+                    <li>Save your selections when done</li>
+                </ol>
+                
+                <button id="warehouse-btn" class="btn">Set Warehouse</button>
+                <button id="destination-btn" class="btn active">Add Destination</button>
+                <div class="btn-group">
+                    <button id="clear-btn" class="btn btn-warning">Clear All</button>
+                    <button id="save-btn" class="btn btn-success">Save Locations</button>
+                </div>
+            </div>
+            
+            <div id="warehouse-display" class="location-info"></div>
+            <div id="destinations-container">
+                <h3>Destinations <span id="count-badge">0</span></h3>
+                <div id="destinations-list"></div>
+            </div>
+        </div>
+        <div id="map"></div>
+    </div>
+    
+    <div id="notification" class="notification hidden">
+        <span id="notification-message"></span>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/map_picker.js') }}"></script>
+    <script>
+        // Initialize map with center from Flask
+        const lat = {{ center_lat | tojson | safe }};
+        const lng = {{ center_lng | tojson | safe }};
+        initMap(lat, lng);
+        
+        // Load any previously saved locations
+        loadSavedLocations();
+    </script>
+</body>
+</html>

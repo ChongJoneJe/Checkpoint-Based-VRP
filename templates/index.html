@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VRP Solver Application</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="landing-container">
+        <div class="hero">
+            <h1>Vehicle Routing Problem Solver</h1>
+            <p>Set up and solve vehicle routing problems with an interactive interface</p>
+        </div>
+        
+        <div class="options-container">
+            <div class="option-card">
+                <h2>Set Up Problem</h2>
+                <p>Define warehouse and delivery locations on an interactive map</p>
+                <a href="{{ url_for('map_picker') }}" class="btn btn-primary">Select Locations</a>
+            </div>
+            
+            <div class="option-card">
+                <h2>Solve VRP</h2>
+                <p>Calculate optimal routes for your delivery problem</p>
+                <a href="#" class="btn btn-secondary" id="solve-btn">Solve Problem</a>
+                <p class="note">This feature will be available once locations are set up</p>
+            </div>
+            
+            <div class="option-card">
+                <h2>View Previous Solutions</h2>
+                <p>Review previously solved routing problems</p>
+                <a href="#" class="btn btn-secondary">View Solutions</a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Check if locations have been set up
+        fetch('{{ url_for("get_locations") }}')
+            .then(response => response.json())
+            .then(data => {
+                const solveBtn = document.getElementById('solve-btn');
+                if (data.warehouse && data.destinations && data.destinations.length > 0) {
+                    solveBtn.classList.remove('btn-secondary');
+                    solveBtn.classList.add('btn-primary');
+                    document.querySelector('.note').style.display = 'none';
+                }
+            });
+    </script>
+</body>
+</html>

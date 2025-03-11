@@ -1,0 +1,5 @@
+Python 3.10.0
+numpy 2.2.3
+openrouteservice 2.3.3
+folium 0.19.5
+scikit-learn 1.6.1
