@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>VRP Solver</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container solver-container">
+        <header>
+            <h1>Vehicle Routing Problem Solver</h1>
+            <a href="{{ url_for('index') }}" class="btn btn-text">← Back to Home</a>
+        </header>
+
+        <div class="main-content">
+            <div class="panel">
+                <h2>Select Location Preset</h2>
+                <div class="presets-container">
+                    <select id="presets-dropdown" class="form-control">
+                        <option value="" disabled selected>-- Select a preset --</option>
+                        {% for preset in presets %}
+                        <option value="{{ preset.id }}">{{ preset.name }} ({{ preset.destinations|length }} destinations)</option>
+                        {% endfor %}
+                    </select>
+                    <button id="load-preset-btn" class="btn btn-primary">Load Preset</button>
+                </div>
+                
+                <div id="preset-info" class="preset-info hidden">
+                    <h3>Selected Preset: <span id="preset-name"></span></h3>
+                    <div class="preset-details">
+                        <p>Warehouse: <span id="warehouse-coords"></span></p>
+                        <p>Destinations: <span id="destination-count"></span></p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2>Solver Settings</h2>
+                <div class="form-group">
+                    <label for="algorithm">Algorithm</label>
+                    <select id="algorithm" class="form-control">
+                        <option value="nearest_neighbor">Nearest Neighbor</option>
+                        <option value="two_opt">2-Opt</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="vehicle-count">Number of Vehicles</label>
+                    <input type="number" id="vehicle-count" class="form-control" value="1" min="1">
+                </div>
+                
+                <button id="solve-btn" class="btn btn-success" disabled>Solve VRP</button>
+            </div>
+            
+            <div id="results-panel" class="panel hidden">
+                <h2>Results</h2>
+                <div id="results-content"></div>
+            </div>
+        </div>
+        
+        <div id="map-container" class="hidden">
+            <div id="map"></div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='js/vrp_solver.js') }}"></script>
+</body>
+</html>

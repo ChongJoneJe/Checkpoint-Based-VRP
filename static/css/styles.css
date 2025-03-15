@@ -337,3 +337,233 @@ body, html {
 .notification.info {
     background-color: #17a2b8;
 }
+
+.legend-container {
+    background-color: #f8f9fa;
+    padding: 10px 15px;
+    margin: 15px 0;
+    border-radius: 5px;
+    border: 1px solid #e9ecef;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin: 8px 0;
+}
+
+.legend-icon {
+    margin-right: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.warehouse-legend {
+    width: 16px;
+    height: 16px;
+    background-color: #343a40;
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
+}
+
+.destination-legend {
+    width: 16px;
+    height: 16px;
+    background-color: #007bff;
+    border: 2px solid white;
+    border-radius: 50%;
+    color: white;
+    font-size: 10px;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
+}
+
+.legend-note {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
+.presets-container {
+    margin-top: 20px;
+    background-color: white;
+    padding: 15px;
+    border-radius: 5px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.preset-controls {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+.preset-input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    margin-right: 8px;
+}
+
+.presets-dropdown {
+    width: 100%;
+    margin-bottom: 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    padding: 5px;
+}
+
+.preset-actions {
+    display: flex;
+    justify-content: space-between;
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: 0.875rem;
+}
+
+.btn-danger {
+    background-color: #dc3545;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c82333;
+}
+
+/* VRP Solver page styles */
+.solver-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    margin-bottom: 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.main-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.panel {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#presets-dropdown {
+    flex: 1;
+}
+
+.form-control {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 1rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    transition: border-color .15s ease-in-out;
+    margin-bottom: 15px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.hidden {
+    display: none;
+}
+
+.preset-info {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 4px;
+    margin-top: 15px;
+    border-left: 4px solid #007bff;
+}
+
+/* Map styles */
+#map-container {
+    height: 500px;
+    margin-top: 20px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#map {
+    height: 100%;
+    width: 100%;
+}
+
+/* Result styles */
+.results-summary {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.route {
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.route h4 {
+    margin-top: 0;
+    border-bottom: 1px solid #dee2e6;
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+
+.direction-arrow {
+    font-size: 16px;
+    color: #333;
+    text-shadow: 1px 1px 1px white;
+}
+
+/* Map marker styles (duplicated from map_picker.css) */
+.warehouse-icon {
+    width: 18px;
+    height: 18px;
+    background-color: #343a40;
+    border: 3px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+.destination-icon {
+    width: 18px;
+    height: 18px;
+    background-color: #007bff;
+    border: 2px solid white;
+    border-radius: 50%;
+    color: white;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
+}

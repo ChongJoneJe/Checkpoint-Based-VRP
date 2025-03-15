@@ -1,12 +1,48 @@
-# config.py
-ORS_API_KEY = "YOUR_API_KEY"
+# Algorithm parameters
+ALGORITHM_CONFIGS = {
+    'nearest_neighbor': {
+        'name': 'Nearest Neighbor',
+        'description': 'Simple greedy algorithm that visits the nearest unvisited location'
+    },
+    'clarke_wright': {
+        'name': 'Clarke-Wright Savings',
+        'description': 'Creates routes by merging trips based on savings'
+    },
+    'two_opt': {
+        'name': 'Two-Opt Improvement',
+        'description': 'Improves routes by swapping edges to eliminate crossings'
+    }
+}
 
-# Test environment parameters
-NUM_NODES = 50
-LAT_RANGE = (40.0, 40.1)
-LON_RANGE = (-74.0, -73.9)
-WAREHOUSE = (40.05, -73.95)
+# Clustering parameters
+CLUSTERING_CONFIGS = {
+    'kmeans': {
+        'name': 'K-Means',
+        'max_clusters': 10
+    }
+}
 
-# DBSCAN parameters (can be adjusted per test)
-DBSCAN_EPS = 0.005
-DBSCAN_MIN_SAMPLES = 4
+# Vehicle parameters
+DEFAULT_VEHICLE = {
+    'capacity': 1000,  # kg
+    'speed': 50,      # km/h
+    'working_hours': 8,  # hours
+    'cost_per_km': 0.5  # cost units
+}
+
+# Map settings
+MAP_SETTINGS = {
+    'default_center': [3.127993, 101.466972],  # Malaysia
+    'default_zoom': 13
+}
+
+# Dynamic VRP settings
+DYNAMIC_SETTINGS = {
+    'time_step': 5,  # minutes per simulation step
+    'new_order_probability': 0.3  # probability of new order per time step
+}
+
+# File paths
+DATA_DIRECTORY = 'static/data'
+PRESETS_FILE = f'{DATA_DIRECTORY}/presets.json'
+LOCATIONS_FILE = f'{DATA_DIRECTORY}/locations.json'
