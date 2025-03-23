@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Location Clustering Analysis</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        .cluster-control-panel {
+            background: #fff;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .cluster-stats {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+        }
+        .legend {
+            padding: 10px;
+            background: white;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border-radius: 50%;
+            border: 1px solid #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Location Clustering Analysis</h1>
+            <nav>
+                <a href="/" class="nav-link">Home</a>
+                <a href="/map_picker" class="nav-link">Map Picker</a>
+            </nav>
+        </header>
+
+        <div class="cluster-control-panel">
+            <h2>Load Preset</h2>
+            <div class="form-group">
+                <label for="presets-list">Select a saved preset:</label>
+                <select id="presets-list" class="form-control"></select>
+                <button id="load-preset-btn" class="btn btn-primary">Load Preset</button>
+            </div>
+
+            <h2>Clustering Options</h2>
+            <div class="form-group">
+                <label for="eps-input">Max Distance (km):</label>
+                <input type="number" id="eps-input" value="0.5" min="0.1" step="0.1" class="form-control">
+                <small class="form-text text-muted">Maximum distance between points in the same cluster</small>
+            </div>
+            <div class="form-group">
+                <label for="min-samples-input">Min Points per Cluster:</label>
+                <input type="number" id="min-samples-input" value="2" min="1" step="1" class="form-control">
+                <small class="form-text text-muted">Minimum number of points required to form a cluster</small>
+            </div>
+            <button id="run-clustering-btn" class="btn btn-success">Run Clustering</button>
+        </div>
+
+        <div class="cluster-stats" id="cluster-stats">
+            <h3>Clustering Results</h3>
+            <p>Load a preset and run clustering to see results.</p>
+        </div>
+
+        <div id="map"></div>
+
+        <div id="notification" class="notification hidden">
+            <span id="notification-message"></span>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="/static/js/clusters.js"></script>
+</body>
+</html>
