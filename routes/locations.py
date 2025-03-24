@@ -1,23 +1,55 @@
 from flask import request, jsonify
 import os
-import json
-import sqlite3  # Import sqlite3 for database operations
-from routes import locations_bp  # Import the blueprint
-from models import db, Location, Intersection
+import sqlite3
+from routes import locations_bp
+from models import db
+from models.location import Location, Intersection
+from models.cluster import Cluster  
+from models.preset import Preset, Warehouse
 from algorithms.dbscan import GeoDBSCAN
-from utils import load_presets, save_presets_to_file
 import uuid
 from datetime import datetime
+from sqlalchemy import desc
 
 @locations_bp.route('/get_locations', methods=['GET'])
 def get_locations():
-    """Retrieve previously saved locations"""
-    # Notice we use locations_bp.route instead of app.route
-    if os.path.exists('static/data/locations.json'):
-        with open('static/data/locations.json', 'r') as f:
-            return jsonify(json.load(f))
-    else:
-        return jsonify({"warehouse": None, "destinations": []})
+    """Retrieve previously saved locations from database"""
+    try:
+        # Try to get the most recent preset
+        latest_preset = Preset.query.order_by(desc(Preset.created_at)).first()
+        
+        if not latest_preset:
+            return jsonify({"warehouse": None, "destinations": []})
+        
+        # Get warehouse location
+        warehouse = Warehouse.query.filter_by(preset_id=latest_preset.id).first()
+        warehouse_coords = None
+        
+        if warehouse:
+            warehouse_location = Location.query.get(warehouse.location_id)
+            if warehouse_location:
+                warehouse_coords = [warehouse_location.lat, warehouse_location.lon]
+        
+        # Get all destinations for this preset (excluding warehouse)
+        destinations = []
+        
+        # Query for destinations using the association table
+        dest_locations = db.session.query(Location).\
+            join(db.Table('preset_locations')).\
+            filter(db.Table('preset_locations').c.preset_id == latest_preset.id).\
+            filter(db.Table('preset_locations').c.is_warehouse == False).all()
+        
+        for loc in dest_locations:
+            destinations.append([loc.lat, loc.lon])
+        
+        return jsonify({
+            "warehouse": warehouse_coords,
+            "destinations": destinations
+        })
+    
+    except Exception as e:
+        print(f"Error retrieving locations: {str(e)}")
+        return jsonify({"warehouse": None, "destinations": [], "error": str(e)})
 
 @locations_bp.route('/save_locations', methods=['POST'])
 def save_locations():
@@ -48,32 +80,6 @@ def save_locations():
             warehouse=data['warehouse'],
             destinations=data['destinations']
         )
-        
-        # Also save current locations to locations.json for compatibility
-        with open('static/data/locations.json', 'w') as f:
-            json.dump({
-                "warehouse": data['warehouse'],
-                "destinations": data['destinations']
-            }, f, indent=2)
-        
-        # Add preset to presets.json
-        from routes.presets import load_presets, save_presets_to_file
-        presets_data = load_presets()
-        
-        # Create new preset entry
-        new_preset = {
-            "id": preset_id,
-            "name": data['name'],
-            "warehouse": data['warehouse'],
-            "destinations": data['destinations'],
-            "created_at": datetime.now().isoformat()
-        }
-        
-        # Add to presets list
-        presets_data["presets"].append(new_preset)
-        
-        # Save to file
-        save_presets_to_file(presets_data)
         
         return jsonify({
             "status": "success", 
@@ -117,54 +123,55 @@ def location_info():
                 "geocoded_address": address
             })
             
-        # Location exists, get its intersections and cluster
-        conn = sqlite3.connect('static/data/locations.db')
-        c = conn.cursor()
+        # Get the location from SQLAlchemy
+        location = Location.query.get(location_id)
+        
+        if not location:
+            return jsonify({
+                "status": "error",
+                "message": "Location found in raw DB but not in ORM"
+            })
         
         # Get cluster information
-        c.execute('''
-            SELECT c.id, c.name, c.centroid_lat, c.centroid_lon
-            FROM clusters c
-            JOIN location_clusters lc ON c.id = lc.cluster_id
-            WHERE lc.location_id = ?
-        ''', (location_id,))
-        
-        cluster_data = c.fetchone()
-        cluster = None
-        
-        if cluster_data:
-            cluster = {
-                "id": cluster_data[0],
-                "name": cluster_data[1],
-                "centroid": [cluster_data[2], cluster_data[3]]
+        cluster_data = None
+        if location.cluster:
+            cluster_data = {
+                "id": location.cluster.id,
+                "name": location.cluster.name,
+                "centroid": [location.cluster.centroid_lat, location.cluster.centroid_lon]
             }
-            
-        # Get intersections
-        c.execute('''
-            SELECT i.id, i.lat, i.lon, li.position
-            FROM intersections i
-            JOIN location_intersections li ON i.id = li.intersection_id
-            WHERE li.location_id = ?
-            ORDER BY li.position
-        ''', (location_id,))
         
-        intersections = []
-        for row in c.fetchall():
-            intersections.append({
-                "id": row[0],
-                "coords": [row[1], row[2]],
-                "position": row[3]
+        # Get intersections
+        intersections_data = []
+        for i, intersection in enumerate(location.intersections):
+            # Find position from the association table
+            position = db.session.query(db.Table('location_intersections').c.position).\
+                filter(db.Table('location_intersections').c.location_id == location_id).\
+                filter(db.Table('location_intersections').c.intersection_id == intersection.id).scalar() or i
+                
+            intersections_data.append({
+                "id": intersection.id,
+                "coords": [intersection.lat, intersection.lon],
+                "position": position
             })
-            
-        conn.close()
+        
+        # Sort by position
+        intersections_data.sort(key=lambda x: x["position"])
         
         return jsonify({
             "status": "success",
             "exists": True,
             "location_id": location_id,
-            "address": address,
-            "cluster": cluster,
-            "intersections": intersections
+            "address": {
+                "street": location.street,
+                "neighborhood": location.neighborhood,
+                "town": location.town,
+                "city": location.city,
+                "postcode": location.postcode,
+                "country": location.country
+            },
+            "cluster": cluster_data,
+            "intersections": intersections_data
         })
         
     except Exception as e:

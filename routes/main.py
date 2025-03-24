@@ -2,6 +2,11 @@ from flask import render_template
 import os
 import json
 from routes import main_bp
+from models import db
+from models.location import Location, Intersection
+from models.cluster import Cluster  
+from models.preset import Preset, Warehouse
+from sqlalchemy import desc
 
 @main_bp.route('/')
 def index():
@@ -15,16 +20,23 @@ def map_picker():
     center_lat = 3.127993  # Malaysia coordinates
     center_lng = 101.466972
     
-    # Check if we have previously saved locations
-    if os.path.exists('static/data/locations.json'):
-        try:
-            with open('static/data/locations.json', 'r') as f:
-                data = json.load(f)
-                if data.get('warehouse'):
-                    center_lat = data['warehouse'][0]
-                    center_lng = data['warehouse'][1]
-        except:
-            pass
+    # Try to get the most recent warehouse from the database
+    try:
+        # Find the most recent preset
+        latest_preset = Preset.query.order_by(desc(Preset.created_at)).first()
+        
+        if latest_preset:
+            # Try to get warehouse for this preset
+            warehouse = Warehouse.query.filter_by(preset_id=latest_preset.id).first()
+            
+            if warehouse:
+                # Get location details
+                location = Location.query.get(warehouse.location_id)
+                if location:
+                    center_lat = location.lat
+                    center_lng = location.lon
+    except Exception as e:
+        print(f"Error retrieving warehouse from database: {str(e)}")
     
     return render_template('map_picker.html', center_lat=center_lat, center_lng=center_lng)
 

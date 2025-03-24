@@ -5,7 +5,7 @@ import uuid
 class Location(db.Model):
     """A geographic location with geocoding information"""
     __tablename__ = 'locations'
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = {'extend_existing': True} 
     
     id = db.Column(db.Integer, primary_key=True)
     lat = db.Column(db.Float, nullable=False)
@@ -20,9 +20,13 @@ class Location(db.Model):
     
     # Relationships
     cluster_id = db.Column(db.Integer, db.ForeignKey('clusters.id'), nullable=True)
+
     cluster = db.relationship('Cluster', back_populates='locations')
-    intersections = db.relationship('Intersection', secondary='location_intersections', back_populates='locations')
-    presets = db.relationship('Preset', secondary='preset_locations', back_populates='locations')
+    
+    # Relationship with intersections
+    intersections = db.relationship('Intersection', 
+                                   secondary='location_intersections',
+                                   backref=db.backref('locations', lazy='dynamic'))
     
     def __repr__(self):
         return f"<Location {self.id}: {self.lat}, {self.lon}>"
@@ -30,16 +34,13 @@ class Location(db.Model):
 class Intersection(db.Model):
     """An intersection point identified along routes"""
     __tablename__ = 'intersections'
-    __table_args__ = {'extend_existing': True}
+    __table_args__ = {'extend_existing': True} 
     
     id = db.Column(db.Integer, primary_key=True)
     lat = db.Column(db.Float, nullable=False)
     lon = db.Column(db.Float, nullable=False)
     description = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    locations = db.relationship('Location', secondary='location_intersections', back_populates='intersections')
     
     def __repr__(self):
         return f"<Intersection {self.id}: {self.lat}, {self.lon}>"
@@ -48,13 +49,14 @@ class Intersection(db.Model):
 location_intersections = db.Table('location_intersections',
     db.Column('location_id', db.Integer, db.ForeignKey('locations.id'), primary_key=True),
     db.Column('intersection_id', db.Integer, db.ForeignKey('intersections.id'), primary_key=True),
-    db.Column('position', db.Integer, nullable=False),  # Position along route
+    db.Column('position', db.Integer, nullable=False),
     extend_existing=True
 )
 
 class Cluster(db.Model):
     """A cluster of locations"""
     __tablename__ = 'clusters'
+    __table_args__ = {'extend_existing': True} 
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255))
@@ -71,6 +73,7 @@ class Cluster(db.Model):
 class Preset(db.Model):
     """A saved set of locations"""
     __tablename__ = 'presets'
+    __table_args__ = {'extend_existing': True} 
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = db.Column(db.String(255), nullable=False)
@@ -94,6 +97,7 @@ preset_locations = db.Table('preset_locations',
 class Warehouse(db.Model):
     """A warehouse location"""
     __tablename__ = 'warehouses'
+    __table_args__ = {'extend_existing': True} 
     
     id = db.Column(db.Integer, primary_key=True)
     preset_id = db.Column(db.String(36), db.ForeignKey('presets.id'), unique=True)

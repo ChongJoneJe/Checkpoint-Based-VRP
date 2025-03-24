@@ -296,7 +296,7 @@ function saveLocations() {
     };
     
     // Send data to server
-    fetch('/save_locations', {
+    fetch('/locations/save_locations', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -308,7 +308,7 @@ function saveLocations() {
         if (data.status === 'success') {
             showNotification(`Locations saved as preset "${presetName}"!`, 'success');
             // Redirect to the VRP solver page
-            window.location.href = '/vrp_solver';
+            window.location.href = '/index';
         } else {
             showNotification('Error: ' + data.message, 'error');
         }
@@ -422,7 +422,7 @@ function savePreset() {
     })
     .catch(error => {
         console.error('Error saving preset:', error);
-        showNotification('Failed to save preset', 'error');
+        showNotification('Failed to save preset. Please try again.', 'error');
     });
 }
 
