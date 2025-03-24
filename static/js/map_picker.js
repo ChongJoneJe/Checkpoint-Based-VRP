@@ -299,23 +299,22 @@ function saveLocations() {
     fetch('/locations/save_locations', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json'
         },
         body: JSON.stringify(data)
     })
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            showNotification(`Locations saved as preset "${presetName}"!`, 'success');
-            // Redirect to the VRP solver page
-            window.location.href = '/index';
+            showNotification('Locations saved successfully!');
+            // Other success handling
         } else {
             showNotification('Error: ' + data.message, 'error');
         }
     })
     .catch(error => {
         console.error('Error saving locations:', error);
-        showNotification('Failed to save locations', 'error');
+        showNotification('Failed to save locations. Please try again.', 'error');
     });
 }
 
