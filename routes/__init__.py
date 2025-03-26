@@ -9,14 +9,16 @@ vrp_bp = Blueprint('vrp', __name__, url_prefix='/vrp')
 all_blueprints = [main_bp, locations_bp, presets_bp, vrp_bp]
 
 def setup_routes(app):
-    # Import route modules here to avoid early model imports
+    # Import blueprints
     from routes.main import main_bp
-    from routes.locations import locations_bp
     from routes.presets import presets_bp
+    from routes.locations import locations_bp
+    from routes.clustering import clustering_bp
     from routes.vrp import vrp_bp
     
-    # Register blueprints
+    # Register blueprints with consistent URL prefixes
     app.register_blueprint(main_bp)
-    app.register_blueprint(locations_bp)
-    app.register_blueprint(presets_bp)
-    app.register_blueprint(vrp_bp)
+    app.register_blueprint(presets_bp, url_prefix='/presets')
+    app.register_blueprint(locations_bp, url_prefix='/locations')
+    app.register_blueprint(clustering_bp, url_prefix='/clustering')
+    app.register_blueprint(vrp_bp, url_prefix='/vrp')

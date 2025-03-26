@@ -41,20 +41,31 @@ def get_connection():
     return conn
 
 def execute_write(query, params=None):
-    """Execute write operation with proper transaction handling"""
-    with get_db() as conn:
+    """Execute a write operation on the database and return lastrowid"""
+    conn = None
+    try:
+        conn = get_connection()
         cursor = conn.cursor()
-        try:
-            cursor.execute("BEGIN IMMEDIATE")  # Get exclusive lock immediately
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            conn.commit()
-            return cursor.lastrowid
-        except Exception as e:
+        
+        print(f"Executing SQL: {query}")
+        print(f"With params: {params}")
+        
+        cursor.execute(query, params if params else ())
+        last_id = cursor.lastrowid
+        
+        # Make sure to commit!
+        conn.commit()
+        print(f"Database commit successful. Last row ID: {last_id}")
+        
+        return last_id
+    except Exception as e:
+        print(f"Database write error: {str(e)}")
+        if conn:
             conn.rollback()
-            raise e
+        raise e
+    finally:
+        if conn:
+            conn.close()
 
 def execute_read(query, params=None, one=False):
     """Execute read operation"""

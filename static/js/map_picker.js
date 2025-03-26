@@ -25,7 +25,21 @@ function initMap(lat, lng) {
     document.getElementById('warehouse-btn').addEventListener('click', () => setLocationMode('warehouse'));
     document.getElementById('destination-btn').addEventListener('click', () => setLocationMode('destination'));
     document.getElementById('clear-btn').addEventListener('click', clearSelections);
-    document.getElementById('save-btn').addEventListener('click', saveLocations);
+    document.getElementById('save-btn').addEventListener('click', function() {
+        // Validate locations first
+        if (!warehouseMarker) {
+            showNotification('Please select a warehouse location first');
+            return;
+        }
+        
+        if (destinationMarkers.length === 0) {
+            showNotification('Please add at least one destination');
+            return;
+        }
+        
+        // Prompt for name
+        showNamePrompt();
+    });
     
     // Add click handler to the map
     map.on('click', handleMapClick);
@@ -271,31 +285,18 @@ function clearSelectionsWithoutConfirm() {
 /**
  * Save the current locations to the server
  */
-function saveLocations() {
-    if (!warehouse) {
-        showNotification('Please set a warehouse location first', 'error');
-        return;
-    }
-    
-    if (destinations.length === 0) {
-        showNotification('Please add at least one destination', 'error');
-        return;
-    }
-    
-    // Prompt for a preset name
-    const presetName = prompt('Enter a name for this set of locations:');
-    if (!presetName || presetName.trim() === '') {
-        showNotification('Preset name is required', 'error');
-        return;
-    }
-    
+function saveLocations(presetName) {
+    // Prepare data
     const data = {
         name: presetName,
-        warehouse: warehouse,
-        destinations: destinations
+        warehouse: [warehouseMarker.getLatLng().lat, warehouseMarker.getLatLng().lng],
+        destinations: destinationMarkers.map(marker => [marker.getLatLng().lat, marker.getLatLng().lng])
     };
     
-    // Send data to server
+    // Show saving notification
+    showNotification('Saving locations...');
+    
+    // Send to backend
     fetch('/locations/save_locations', {
         method: 'POST',
         headers: {
@@ -307,14 +308,13 @@ function saveLocations() {
     .then(data => {
         if (data.status === 'success') {
             showNotification('Locations saved successfully!');
-            // Other success handling
         } else {
-            showNotification('Error: ' + data.message, 'error');
+            showNotification('Error: ' + data.message);
         }
     })
     .catch(error => {
-        console.error('Error saving locations:', error);
-        showNotification('Failed to save locations. Please try again.', 'error');
+        console.error('Error:', error);
+        showNotification('Failed to save locations');
     });
 }
 
@@ -322,7 +322,7 @@ function saveLocations() {
  * Load saved locations from server
  */
 function loadSavedLocations() {
-    fetch('/get_locations')
+    fetch('/locations/get_locations')
         .then(response => response.json())
         .then(data => {
             // If we have a warehouse location
@@ -348,7 +348,7 @@ function loadSavedLocations() {
  * Load available presets from the server
  */
 function loadPresets() {
-    fetch('/get_presets')
+    fetch('/presets/get_presets')
         .then(response => response.json())
         .then(data => {
             const presetsList = document.getElementById('presets-list');
@@ -525,3 +525,150 @@ function showNotification(message, type = 'info') {
         notification.classList.add('hidden');
     }, 3000);
 }
+
+function showNamePrompt() {
+    // Show the notification with the name input
+    const notification = document.getElementById('notification');
+    const messageSpan = document.getElementById('notification-message');
+    const nameContainer = document.getElementById('name-input-container');
+    
+    messageSpan.textContent = 'Please enter a name for your preset:';
+    nameContainer.classList.remove('hidden');
+    notification.classList.remove('hidden');
+    
+    // Focus the input
+    document.getElementById('preset-name-prompt').focus();
+    
+    // Set up button handlers if they don't exist yet
+    if (!document.getElementById('confirm-name-btn').hasClickHandler) {
+        document.getElementById('confirm-name-btn').addEventListener('click', confirmSaveWithName);
+        document.getElementById('confirm-name-btn').hasClickHandler = true;
+    }
+    
+    if (!document.getElementById('cancel-name-btn').hasClickHandler) {
+        document.getElementById('cancel-name-btn').addEventListener('click', cancelSave);
+        document.getElementById('cancel-name-btn').hasClickHandler = true;
+    }
+    
+    // Also allow Enter key to confirm
+    document.getElementById('preset-name-prompt').addEventListener('keyup', function(event) {
+        if (event.key === 'Enter') {
+            confirmSaveWithName();
+        }
+    });
+}
+
+function confirmSaveWithName() {
+    const name = document.getElementById('preset-name-prompt').value.trim();
+    
+    if (!name) {
+        // Highlight the input if empty
+        document.getElementById('preset-name-prompt').style.borderColor = 'red';
+        return;
+    }
+    
+    // Hide the name prompt
+    hideNamePrompt();
+    
+    // Proceed with saving
+    saveLocations(name);
+}
+
+function cancelSave() {
+    hideNamePrompt();
+    showNotification('Location saving canceled');
+    setTimeout(hideNotification, 3000);
+}
+
+function hideNamePrompt() {
+    document.getElementById('name-input-container').classList.add('hidden');
+    document.getElementById('notification').classList.add('hidden');
+    document.getElementById('preset-name-prompt').value = '';
+    document.getElementById('preset-name-prompt').style.borderColor = '';
+}
+
+function hideNotification() {
+    document.getElementById('notification').classList.add('hidden');
+}
+
+/**
+ * Prompt user for preset name and save locations
+ */
+function promptSaveLocations() {
+    if (!warehouseMarker) {
+        showNotification('Please select a warehouse location first', 'error');
+        return;
+    }
+    
+    if (destinationMarkers.length === 0) {
+        showNotification('Please add at least one destination', 'error');
+        return;
+    }
+    
+    // Prompt for name with a simple dialog
+    const presetName = prompt('Please enter a name for this preset:');
+    
+    if (!presetName || presetName.trim() === '') {
+        showNotification('Preset name is required', 'error');
+        return;
+    }
+    
+    const data = {
+        name: presetName,
+        warehouse: [warehouseMarker.getLatLng().lat, warehouseMarker.getLatLng().lng],
+        destinations: destinationMarkers.map(marker => [marker.getLatLng().lat, marker.getLatLng().lng])
+    };
+    
+    // Show saving notification
+    showNotification('Saving locations...', 'info');
+    
+    // Send to backend
+    fetch('/locations/save_locations', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showNotification('Locations saved successfully!', 'success');
+            // Reload presets if you have a presets list
+            if (typeof loadPresets === 'function') {
+                loadPresets();
+            }
+        } else {
+            showNotification('Error: ' + data.message, 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showNotification('Failed to save locations', 'error');
+    });
+}
+
+// Clean up the event listeners at the bottom of your file
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize map with default center if not provided
+    if (typeof initMap === 'function' && typeof lat === 'undefined') {
+        initMap(3.1390, 101.6869); // Default to Malaysia
+    }
+    
+    // Set up button event listeners
+    document.getElementById('warehouse-btn').addEventListener('click', function() {
+        setLocationMode('warehouse');
+    });
+    
+    document.getElementById('destination-btn').addEventListener('click', function() {
+        setLocationMode('destination');
+    });
+    
+    document.getElementById('clear-btn').addEventListener('click', clearSelections);
+    
+    // Set up the save button with direct prompt
+    document.getElementById('save-btn').addEventListener('click', promptSaveLocations);
+    
+    // Load previously saved locations if any
+    loadSavedLocations();
+});

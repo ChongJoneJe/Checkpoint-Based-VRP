@@ -7,12 +7,11 @@ class Preset(db.Model):
     __tablename__ = 'presets'
     __table_args__ = {'extend_existing': True} 
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = db.Column(db.String(255), nullable=False)
+    id = db.Column(db.String, primary_key=True)
+    name = db.Column(db.String, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    def __repr__(self):
-        return f"<Preset {self.id}: {self.name}>"
+    # Relationship is defined in Location model with backref
 
 # Association table for preset-location relationship
 preset_locations = db.Table('preset_locations',

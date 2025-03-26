@@ -10,12 +10,12 @@ class Location(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     lat = db.Column(db.Float, nullable=False)
     lon = db.Column(db.Float, nullable=False)
-    street = db.Column(db.String(255))
-    neighborhood = db.Column(db.String(255))
-    town = db.Column(db.String(255))
-    city = db.Column(db.String(255))
-    postcode = db.Column(db.String(50))
-    country = db.Column(db.String(100))
+    street = db.Column(db.String)
+    neighborhood = db.Column(db.String)
+    town = db.Column(db.String)
+    city = db.Column(db.String)
+    postcode = db.Column(db.String)
+    country = db.Column(db.String)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -27,6 +27,11 @@ class Location(db.Model):
     intersections = db.relationship('Intersection', 
                                    secondary='location_intersections',
                                    backref=db.backref('locations', lazy='dynamic'))
+    
+    # Define relationship to presets through preset_locations table
+    presets = db.relationship('Preset', 
+                             secondary='preset_locations',
+                             backref=db.backref('locations', lazy='dynamic'))
     
     def __repr__(self):
         return f"<Location {self.id}: {self.lat}, {self.lon}>"
@@ -52,23 +57,6 @@ location_intersections = db.Table('location_intersections',
     db.Column('position', db.Integer, nullable=False),
     extend_existing=True
 )
-
-class Cluster(db.Model):
-    """A cluster of locations"""
-    __tablename__ = 'clusters'
-    __table_args__ = {'extend_existing': True} 
-    
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255))
-    centroid_lat = db.Column(db.Float)
-    centroid_lon = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    locations = db.relationship('Location', back_populates='cluster')
-    
-    def __repr__(self):
-        return f"<Cluster {self.id}: {self.name}>"
 
 class Preset(db.Model):
     """A saved set of locations"""

@@ -40,44 +40,63 @@ class GeoDBSCAN:
         else:
             self.client = None
     
-    def geocode_location(self, lat, lon):
+    def geocode_location(self, lat, lon, max_retries=3):
         """
         Geocode a location to get address components using Nominatim
         
         Args:
             lat (float): Latitude
             lon (float): Longitude
+            max_retries (int): Maximum number of retry attempts
             
         Returns:
             dict: Address components or None if geocoding failed
         """
-        try:
-            # Use Nominatim API
-            response = requests.get(
-                f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=18&addressdetails=1",
-                headers={"User-Agent": "python-clustering-app"}
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                address = data.get('address', {})
+        import requests
+        import time
+        import random
+        
+        for attempt in range(max_retries):
+            try:
+                # Use Nominatim API
+                response = requests.get(
+                    f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=18&addressdetails=1",
+                    headers={"User-Agent": "python-clustering-app"}
+                )
                 
-                result = {
-                    'street': address.get('road') or address.get('pedestrian') or address.get('footway') or '',
-                    'neighborhood': address.get('neighbourhood') or address.get('suburb') or '',
-                    'town': address.get('town') or address.get('village') or '',
-                    'city': address.get('city') or '',
-                    'postcode': address.get('postcode') or '',
-                    'country': address.get('country') or ''
-                }
+                if response.status_code == 200:
+                    data = response.json()
+                    address = data.get('address', {})
+                    
+                    result = {
+                        'street': address.get('road') or address.get('pedestrian') or address.get('footway') or '',
+                        'neighborhood': address.get('suburb') or address.get('neighbourhood') or address.get('residential') or '',
+                        'town': address.get('town') or address.get('village') or '',
+                        'city': address.get('city') or address.get('county') or '',
+                        'postcode': address.get('postcode', ''),
+                        'country': address.get('country', '')
+                    }
+                    
+                    print(f"Successfully geocoded location: {lat}, {lon} → {result['street']}, {result['neighborhood']}")
+                    return result
                 
-                return result
-            
-            return None
-            
-        except Exception as e:
-            print(f"Geocoding error: {str(e)}")
-            return None
+                elif response.status_code == 429:  # Too Many Requests
+                    # Exponential backoff
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    print(f"Rate limited by Nominatim, waiting {wait_time:.2f} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                    
+                else:
+                    print(f"Geocoding error: {response.status_code} - {response.text}")
+                    time.sleep(1)  # Brief pause before retry
+                    
+            except Exception as e:
+                print(f"Geocoding exception: {str(e)}")
+                time.sleep(1)  # Brief pause before retry
+        
+        print(f"Failed to geocode location after {max_retries} attempts: {lat}, {lon}")
+        return None
     
     def add_location_to_db(self, lat, lon, address=None):
         """
@@ -93,6 +112,10 @@ class GeoDBSCAN:
         """
         if address is None:
             address = self.geocode_location(lat, lon)
+            if address is None:
+                print(f"WARNING: Failed to geocode location ({lat}, {lon})")
+            else:
+                print(f"Successfully geocoded ({lat}, {lon}) to {address.get('street', 'unknown street')}")
             
         if address:
             conn = sqlite3.connect(self.db_path)
@@ -460,7 +483,8 @@ class GeoDBSCAN:
         # First geocode the location
         address = self.geocode_location(lat, lon)
         if not address:
-            return None, None, False
+            print(f"Warning: Could not geocode location ({lat}, {lon}) - creating without address data")
+            address = {'street': '', 'neighborhood': '', 'town': '', 'city': '', 'postcode': '', 'country': ''}
         
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
@@ -489,9 +513,30 @@ class GeoDBSCAN:
                 cluster_result = c.fetchone()
                 cluster_id = cluster_result[0] if cluster_result else None
                 
+                # If it has address info, make sure it's complete
+                if address:
+                    c.execute('''
+                        UPDATE locations SET 
+                        street = COALESCE(street, ?),
+                        neighborhood = COALESCE(neighborhood, ?),
+                        town = COALESCE(town, ?),
+                        city = COALESCE(city, ?),
+                        postcode = COALESCE(postcode, ?),
+                        country = COALESCE(country, ?)
+                        WHERE id = ?
+                    ''', (
+                        address.get('street', ''),
+                        address.get('neighborhood', ''),
+                        address.get('town', ''),
+                        address.get('city', ''),
+                        address.get('postcode', ''),
+                        address.get('country', ''),
+                        location_id
+                    ))
+                
                 conn.commit()
                 return location_id, cluster_id, False
-            
+                
             # Location doesn't exist, add it
             c.execute('''
                 INSERT INTO locations (lat, lon, street, neighborhood, town, city, postcode, country)

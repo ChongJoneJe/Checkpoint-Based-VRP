@@ -1,12 +1,8 @@
 from flask import render_template
-import os
-import json
 from routes import main_bp
-from models import db
-from models.location import Location, Intersection
-from models.cluster import Cluster  
-from models.preset import Preset, Warehouse
-from sqlalchemy import desc
+from services.main_service import MainService
+from services.preset_service import PresetService
+from routes.presets import load_presets
 
 @main_bp.route('/')
 def index():
@@ -16,27 +12,8 @@ def index():
 @main_bp.route('/map_picker')
 def map_picker():
     """Interactive map for selecting warehouse and delivery locations"""
-    # Default center coordinates 
-    center_lat = 3.127993  # Malaysia coordinates
-    center_lng = 101.466972
-    
-    # Try to get the most recent warehouse from the database
-    try:
-        # Find the most recent preset
-        latest_preset = Preset.query.order_by(desc(Preset.created_at)).first()
-        
-        if latest_preset:
-            # Try to get warehouse for this preset
-            warehouse = Warehouse.query.filter_by(preset_id=latest_preset.id).first()
-            
-            if warehouse:
-                # Get location details
-                location = Location.query.get(warehouse.location_id)
-                if location:
-                    center_lat = location.lat
-                    center_lng = location.lon
-    except Exception as e:
-        print(f"Error retrieving warehouse from database: {str(e)}")
+    # Get default center coordinates from service
+    center_lat, center_lng = MainService.get_default_map_center()
     
     return render_template('map_picker.html', center_lat=center_lat, center_lng=center_lng)
 
@@ -44,3 +21,10 @@ def map_picker():
 def clusters_page():
     """Page for analyzing location clusters"""
     return render_template('clusters.html')
+
+@main_bp.route('/vrp_solver')
+def vrp_solver():
+    """Page for solving vehicle routing problems"""
+    # Get all presets for the solver page
+    presets = PresetService.get_all_presets()
+    return render_template('vrp_solver.html', presets=presets)

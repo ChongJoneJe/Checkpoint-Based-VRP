@@ -92,8 +92,8 @@ def reset_database():
     -- Warehouses table
     CREATE TABLE warehouses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        preset_id TEXT UNIQUE,
-        location_id INTEGER UNIQUE,
+        preset_id TEXT NOT NULL,
+        location_id INTEGER NOT NULL,
         FOREIGN KEY (preset_id) REFERENCES presets(id),
         FOREIGN KEY (location_id) REFERENCES locations(id)
     );

@@ -567,3 +567,19 @@ header {
     justify-content: center;
     box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
 }
+
+#warehouse-info {
+    background-color: #f8f9fa;
+    padding: 10px;
+    margin-bottom: 15px;
+    border-left: 3px solid #ff6600;
+}
+
+.warehouse-popup {
+    padding: 5px;
+}
+
+.warehouse-popup h4 {
+    margin-top: 0;
+    color: #ff6600;
+}
