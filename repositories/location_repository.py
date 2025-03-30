@@ -134,3 +134,43 @@ class LocationRepository:
             params.append(exclude_location_id)
         
         return execute_read(query, params)
+    
+    @staticmethod
+    def find_nearby_locations(lat, lon, radius=0.002, exclude_location_id=None):
+        """
+        Find locations within a certain radius (in degrees, ~111km per degree of latitude)
+        
+        Args:
+            lat (float): Latitude
+            lon (float): Longitude
+            radius (float): Search radius in degrees (~111m per 0.001 degrees)
+            exclude_location_id (int): Optional location ID to exclude
+            
+        Returns:
+            list: Matching location records
+        """
+        query = """
+            SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.city, lc.cluster_id
+            FROM locations l
+            LEFT JOIN location_clusters lc ON l.id = lc.location_id
+            WHERE (l.lat BETWEEN ? AND ?) 
+              AND (l.lon BETWEEN ? AND ?)
+        """
+        
+        params = [
+            lat - radius, lat + radius,
+            lon - radius, lon + radius
+        ]
+        
+        if exclude_location_id:
+            query += " AND l.id != ?"
+            params.append(exclude_location_id)
+        
+        # Add an additional distance calculation to filter more precisely
+        query += " ORDER BY ((l.lat - ?)*(l.lat - ?) + (l.lon - ?)*(l.lon - ?)) ASC"
+        params.extend([lat, lat, lon, lon])
+        
+        results = execute_read(query, params)
+        
+        # Further filter the results to only include locations that actually have a cluster assigned
+        return [loc for loc in results if loc['cluster_id'] is not None]

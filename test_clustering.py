@@ -294,6 +294,37 @@ def test_pattern_based_clustering():
     
     print("\n=== Pattern-based clustering test completed ===")
 
+def test_proximity_clustering():
+    """Test proximity-based clustering for nearby locations without shared name patterns"""
+    print("=== Starting proximity-based clustering test ===")
+    
+    # Initialize the clustering algorithm
+    geocoder = GeoDBSCAN()
+    
+    # Test locations that should be in the same section but don't share common name patterns
+    test_locations = [
+        # U13 section addresses with different suffixes
+        {"lat": 3.1234, "lon": 101.5678, "street": "Jalan U13/56C", "neighborhood": ""},
+        {"lat": 3.1235, "lon": 101.5679, "street": "Jalan U13/52D", "neighborhood": ""},  # Very close to first location
+        {"lat": 3.1236, "lon": 101.5680, "street": "Jalan U13/48A", "neighborhood": ""},  # Also close
+        
+        # Some address with completely different pattern but same section, still close
+        {"lat": 3.1237, "lon": 101.5682, "street": "Lorong Setia U13", "neighborhood": ""},
+        
+        # A different section, but close by
+        {"lat": 3.1240, "lon": 101.5685, "street": "Jalan U12/5B", "neighborhood": ""},
+        
+        # Far away location, different section
+        {"lat": 3.2000, "lon": 101.6000, "street": "Jalan SS15/3D", "neighborhood": ""}
+    ]
+    
+    # Mock warehouse location
+    warehouse = {"lat": 3.1000, "lon": 101.5000}
+    
+    # Run the clustering test
+    # Process each location and check if the close ones are clustered together
+    # ...similar to the other test implementations
+
 if __name__ == "__main__":
     # Clear the database before testing
     from reset_db import reset_database

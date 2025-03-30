@@ -583,15 +583,7 @@ class GeoDBSCAN:
     def add_location_with_smart_clustering(self, lat, lon, warehouse_lat, warehouse_lon):
         """
         Add a location to the database with smart clustering based on street pattern matching
-        
-        Args:
-            lat (float): Latitude
-            lon (float): Longitude
-            warehouse_lat (float): Warehouse latitude
-            warehouse_lon (float): Warehouse longitude
-            
-        Returns:
-            tuple: (location_id, cluster_id, is_new_cluster, checkpoint)
+        with proximity fallback
         """
         from repositories.location_repository import LocationRepository
         from repositories.cluster_repository import ClusterRepository
@@ -646,6 +638,30 @@ class GeoDBSCAN:
                     matches.extend(pattern_matches)
                     match_type = "development_pattern"
                     print(f"Found {len(pattern_matches)} locations with development pattern match: {development_pattern}")
+            
+            # NEW CODE: STEP 3: If still no matches, check for proximity to other locations
+            if not matches:
+                # Find existing locations that are physically close (within 200 meters)
+                proximity_matches = LocationRepository.find_nearby_locations(lat, lon, 0.002, location_id)  # ~200m radius
+                if proximity_matches:
+                    matches.extend(proximity_matches)
+                    match_type = "proximity"
+                    print(f"Found {len(proximity_matches)} locations within proximity range")
+                    
+                    # Extract section identifier if present (for U13/56C type addresses)
+                    section_id = self._extract_section_identifier(street)
+                    if section_id:
+                        print(f"Identified section identifier: {section_id}")
+                        
+                        # If a section identifier like "U13" was found, prioritize matches with same section
+                        section_matches = [m for m in proximity_matches if 
+                                         self._extract_section_identifier(m['street']) == section_id]
+                        
+                        if section_matches:
+                            # Replace all matches with only those from same section
+                            matches = section_matches
+                            match_type = "section_proximity"
+                            print(f"Refined to {len(section_matches)} locations in same section: {section_id}")
             
             # Clustering logic
             cluster_id = None
@@ -797,6 +813,37 @@ class GeoDBSCAN:
             return words[0].title()
             
         return street.title()
+
+    def _extract_section_identifier(self, street):
+        """
+        Extract section identifier from addresses like "Jalan U13/56C"
+        
+        Args:
+            street (str): Street name
+            
+        Returns:
+            str: Section identifier (e.g., "U13") or None
+        """
+        if not street:
+            return None
+            
+        # Look for section patterns in Malaysian addresses
+        # Common patterns: U13/56C, 25/3, SS15/3D
+        section_patterns = [
+            r'([A-Z]\d+)(?:/\d+[A-Z]?)?',  # U13/56C -> U13
+            r'(SS\d+)(?:/\d+[A-Z]?)?',     # SS15/3D -> SS15
+            r'(USJ\d+)(?:/\d+[A-Z]?)?',    # USJ1/3A -> USJ1
+            r'(PJU\d+(?:/\d+)?)(?:/\d+[A-Z]?)?',  # PJU10/11D -> PJU10
+            r'(Section \d+)',               # Section 13
+            r'^(\d+)(?:/\d+[A-Z]?)'        # 25/3B -> 25
+        ]
+        
+        for pattern in section_patterns:
+            match = re.search(pattern, street, re.IGNORECASE)
+            if match:
+                return match.group(1).upper()
+                
+        return None
 
     def compare_routes(self, route1_intersections, route2_intersections):
         """

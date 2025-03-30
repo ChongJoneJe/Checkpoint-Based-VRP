@@ -619,8 +619,8 @@ function promptSaveLocations() {
         destinations: destinationMarkers.map(marker => [marker.getLatLng().lat, marker.getLatLng().lng])
     };
     
-    // Show saving notification
-    showNotification('Saving locations...', 'info');
+    // Show loading indicator
+    showLoadingIndicator(destinationMarkers.length);
     
     // Send to backend
     fetch('/locations/save_locations', {
@@ -632,6 +632,9 @@ function promptSaveLocations() {
     })
     .then(response => response.json())
     .then(data => {
+        // Hide loading indicator
+        hideLoadingIndicator();
+        
         if (data.status === 'success') {
             showNotification('Locations saved successfully!', 'success');
             // Reload presets if you have a presets list
@@ -643,9 +646,88 @@ function promptSaveLocations() {
         }
     })
     .catch(error => {
+        // Hide loading indicator on error
+        hideLoadingIndicator();
+        
         console.error('Error:', error);
         showNotification('Failed to save locations', 'error');
     });
+}
+
+/**
+ * Show loading indicator with progress
+ */
+function showLoadingIndicator(totalLocations) {
+    // Create loading overlay if it doesn't exist
+    let loadingOverlay = document.getElementById('loading-overlay');
+    if (!loadingOverlay) {
+        loadingOverlay = document.createElement('div');
+        loadingOverlay.id = 'loading-overlay';
+        loadingOverlay.innerHTML = `
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <h3>Saving Locations</h3>
+                <div class="progress-container">
+                    <div id="loading-progress-bar" class="progress-bar"></div>
+                </div>
+                <div id="loading-message">Preparing to save...</div>
+            </div>
+        `;
+        document.body.appendChild(loadingOverlay);
+    }
+    
+    // Show the overlay
+    loadingOverlay.style.display = 'flex';
+    
+    // Reset progress bar
+    const progressBar = document.getElementById('loading-progress-bar');
+    progressBar.style.width = '0%';
+    
+    // Simulate progress based on number of locations
+    const loadingMessage = document.getElementById('loading-message');
+    const steps = [
+        { percent: 10, message: 'Initializing...' },
+        { percent: 20, message: 'Validating warehouse location...' },
+        { percent: 30, message: 'Processing destinations...' },
+        { percent: 50, message: 'Geocoding addresses...' },
+        { percent: 70, message: 'Identifying clusters...' },
+        { percent: 85, message: 'Finalizing...' },
+        { percent: 95, message: 'Saving to database...' }
+    ];
+    
+    // Add some randomness to make it feel more natural
+    const timePerStep = 300 + Math.random() * 200;
+    const totalTime = timePerStep * steps.length;
+    
+    // Update progress bar and message
+    steps.forEach((step, index) => {
+        setTimeout(() => {
+            if (loadingOverlay.style.display !== 'none') {
+                progressBar.style.width = step.percent + '%';
+                loadingMessage.textContent = step.message;
+            }
+        }, timePerStep * index);
+    });
+}
+
+/**
+ * Hide loading indicator
+ */
+function hideLoadingIndicator() {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    if (loadingOverlay) {
+        // Complete the progress bar animation first
+        const progressBar = document.getElementById('loading-progress-bar');
+        const loadingMessage = document.getElementById('loading-message');
+        
+        progressBar.style.width = '100%';
+        loadingMessage.textContent = 'Complete!';
+        
+        // Hide after a short delay to show completion
+        setTimeout(() => {
+            loadingOverlay.style.display = 'none';
+        }, 500);
+    }
 }
 
 // Clean up the event listeners at the bottom of your file
