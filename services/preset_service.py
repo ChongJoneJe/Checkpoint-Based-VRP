@@ -4,6 +4,7 @@ from models.location import Location, Intersection
 from models.cluster import Cluster
 from models.preset import Preset, Warehouse
 from sqlalchemy import desc
+from utils.database import execute_read, execute_write  # Add this import at the top
 
 class PresetService:
     @staticmethod
@@ -89,13 +90,12 @@ class PresetService:
                     db.session.add(dest_location)
                     db.session.flush()
                 
-                # Link in preset_locations
-                db.session.execute(
-                    db.Table('preset_locations').insert().values(
-                        preset_id=preset_id,
-                        location_id=dest_location.id,
-                        is_warehouse=False
-                    )
+                dest_loc_id = dest_location.id
+                
+                # Add to preset_locations with is_warehouse=0
+                execute_write(
+                    "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 0)",
+                    (preset_id, dest_loc_id)
                 )
         
         return preset_id
@@ -170,31 +170,31 @@ class PresetService:
     
     @staticmethod
     def get_all_presets_basic():
-        """Get basic preset information using raw SQL to avoid ORM issues"""
-        from utils.database import execute_read
-        
-        query = """
-        SELECT id, name, created_at 
-        FROM presets 
-        ORDER BY created_at DESC
-        """
-        
-        presets_rows = execute_read(query)
-        
-        # Convert sqlite3.Row objects to dictionaries so they can be modified
-        presets = []
-        for row in presets_rows:
-            preset_dict = dict(row)
-            
-            # Get location count
-            count_query = """
-            SELECT COUNT(*) as count
-            FROM preset_locations
-            WHERE preset_id = ? AND is_warehouse = 0
+        """Get basic preset information with location counts using raw SQL"""
+        try:
+            # Use raw SQL query instead of ORM
+            presets_query = """
+                SELECT p.id, p.name, p.created_at,
+                      (SELECT COUNT(*) FROM preset_locations pl 
+                       WHERE pl.preset_id = p.id) as location_count
+                FROM presets p
+                ORDER BY p.created_at DESC
             """
-            count_result = execute_read(count_query, (preset_dict['id'],), one=True)
-            preset_dict['location_count'] = count_result['count'] if count_result else 0
             
-            presets.append(preset_dict)
-        
-        return presets
+            # Execute raw query
+            presets_rows = execute_read(presets_query)
+            
+            # Convert sqlite3.Row objects to dictionaries
+            presets_data = []
+            for row in presets_rows:
+                presets_data.append({
+                    'id': row['id'],
+                    'name': row['name'],
+                    'location_count': row['location_count'],
+                    'created_at': row['created_at']
+                })
+                
+            return presets_data
+        except Exception as e:
+            print(f"Error in get_all_presets_basic: {str(e)}")
+            return []  # Return empty list on error

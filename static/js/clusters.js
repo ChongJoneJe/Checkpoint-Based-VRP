@@ -63,52 +63,60 @@ function initMap() {
     });
 }
 
-// Load presets for the dropdown
+// Update this function in clusters.js
 function loadPresets() {
-    console.log("Loading presets...");
+    console.log("Loading presets..."); // Debug line
     
-    fetch('/clustering/get_presets_for_clustering')
+    fetch('/clustering/get_presets_for_clustering')  // Changed from '/presets/get_presets'
         .then(response => {
-            console.log("Preset API response status:", response.status);
-            if (!response.ok) {
-                throw new Error(`HTTP error! Status: ${response.status}`);
-            }
+            console.log("Got response:", response.status); // Debug line
             return response.json();
         })
         .then(data => {
-            console.log("Preset data:", data);
+            console.log("Presets data:", data); // Debug to see response data
             
-            // Clear any existing options except "All Locations"
-            const selectElement = document.getElementById('preset-select');
-            while (selectElement.options.length > 1) {
-                selectElement.remove(1);
-            }
+            // Populate dropdown
+            const presetSelect = document.getElementById('preset-select');
+            // Clear existing options
+            presetSelect.innerHTML = '';
             
-            // Add presets
+            // Add default option
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'Select a preset...';
+            defaultOption.selected = true;
+            presetSelect.appendChild(defaultOption);
+            
             if (data.presets && data.presets.length > 0) {
+                console.log(`Found ${data.presets.length} presets`); // Debug line
+                
                 data.presets.forEach(preset => {
                     const option = document.createElement('option');
                     option.value = preset.id;
                     option.textContent = `${preset.name} (${preset.location_count || 0} locations)`;
-                    selectElement.appendChild(option);
+                    presetSelect.appendChild(option);
                 });
-                console.log(`Added ${data.presets.length} presets to dropdown`);
             } else {
-                console.log("No presets found in response");
-                // Add message when no presets exist
-                const emptyOption = document.createElement('option');
-                emptyOption.disabled = true;
-                emptyOption.textContent = "No saved presets found";
-                selectElement.appendChild(emptyOption);
+                console.log("No presets found in response"); // Debug line
+                
+                const option = document.createElement('option');
+                option.disabled = true;
+                option.value = '';
+                option.textContent = 'No saved presets found';
+                presetSelect.appendChild(option);
             }
         })
         .catch(error => {
             console.error('Error loading presets:', error);
-            const selectElement = document.getElementById('preset-select');
+            
+            // Add error handling to dropdown
+            const presetSelect = document.getElementById('preset-select');
+            presetSelect.innerHTML = '';
             const errorOption = document.createElement('option');
             errorOption.disabled = true;
-            errorOption.textContent = "Error loading presets";
-            selectElement.appendChild(errorOption);
+            errorOption.selected = true;
+            errorOption.textContent = 'Error loading presets';
+            presetSelect.appendChild(errorOption);
         });
 }
 
@@ -122,9 +130,11 @@ function loadClusters(presetId = 'all') {
     
     // Build URL with optional preset filter
     let url = '/clustering/get_clusters';
-    if (presetId !== 'all') {
+    if (presetId && presetId !== 'all') {
         url += `?preset_id=${presetId}`;
     }
+    
+    console.log("Loading clusters from:", url); // Debug log
     
     fetch(url)
         .then(response => response.json())

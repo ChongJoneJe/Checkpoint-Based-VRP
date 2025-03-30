@@ -11,7 +11,13 @@ class Preset(db.Model):
     name = db.Column(db.String, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    # Relationship is defined in Location model with backref
+    # Change backref to back_populates
+    locations = db.relationship('Location', secondary='preset_locations', 
+                               back_populates='presets')
+    
+    # Make sure this matches the Warehouse model's relationship
+    warehouse = db.relationship('Warehouse', uselist=False, 
+                               back_populates='preset')
 
 # Association table for preset-location relationship
 preset_locations = db.Table('preset_locations',
@@ -31,7 +37,7 @@ class Warehouse(db.Model):
     location_id = db.Column(db.Integer, db.ForeignKey('locations.id'), unique=True)
     
     # Relationships
-    preset = db.relationship('Preset')
+    preset = db.relationship('Preset', back_populates='warehouse')
     location = db.relationship('Location')
     
     def __repr__(self):

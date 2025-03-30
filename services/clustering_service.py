@@ -4,135 +4,175 @@ from models.cluster import Cluster
 from models.preset import Preset, Warehouse
 from algorithms.dbscan import GeoDBSCAN
 from utils.database import execute_read
+from services.preset_service import PresetService
 
 class ClusteringService:
     @staticmethod
     def get_clusters(preset_id=None):
-        """
-        Get clusters for visualization
-        
-        Args:
-            preset_id: Optional preset ID to filter clusters
-            
-        Returns:
-            tuple: (clusters, warehouse, stats)
-        """
-        # Base query for locations, excluding warehouses from general results
-        query = """
-            SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city,
-                   c.id as cluster_id, c.name as cluster_name, 
-                   c.centroid_lat, c.centroid_lon,
-                   pl.is_warehouse
-            FROM locations l
-            LEFT JOIN location_clusters lc ON l.id = lc.location_id
-            LEFT JOIN clusters c ON lc.cluster_id = c.id
-            LEFT JOIN preset_locations pl ON l.id = pl.location_id
-        """
-        
-        # Add preset filter if specified
-        params = []
+        """Get clusters for visualization"""
         if preset_id:
-            query += " WHERE pl.preset_id = ? "
-            params.append(preset_id)
-        else:
-            # For all locations, exclude warehouses from regular clusters
-            query += " WHERE (pl.is_warehouse IS NULL OR pl.is_warehouse = 0) "
-        
-        # Execute query
-        results = execute_read(query, params)
-        
-        # Organize results by cluster
-        clusters = {}
-        noise_points = []
-        warehouse = None
-        
-        for row in results:
-            # Check if this is a warehouse
-            if row['is_warehouse'] == 1:
-                # Store the warehouse separately
-                warehouse = {
-                    'id': row['id'],
-                    'lat': row['lat'],
-                    'lon': row['lon'],
-                    'street': row['street'],
-                    'neighborhood': row['neighborhood'],
-                    'town': row['town'],
-                    'city': row['city']
-                }
-                continue
+            try:
+                # Use raw SQL to get preset data instead of SQLAlchemy
+                preset_query = """
+                    SELECT p.id, p.name, p.created_at
+                    FROM presets p
+                    WHERE p.id = ?
+                """
+                preset_row = execute_read(preset_query, (preset_id,), one=True)
                 
-            # If location has a cluster
-            if row['cluster_id']:
-                cluster_id = row['cluster_id']
+                if not preset_row:
+                    return [], None, {"total_locations": 0, "num_clusters": 0, "noise_points": 0}
                 
-                # Initialize cluster if not seen before
-                if cluster_id not in clusters:
-                    clusters[cluster_id] = {
-                        'id': cluster_id,
-                        'name': row['cluster_name'],
-                        'centroid': [row['centroid_lat'], row['centroid_lon']],
-                        'locations': []
+                # Get warehouse
+                warehouse_query = """
+                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city
+                    FROM locations l
+                    JOIN preset_locations pl ON l.id = pl.location_id
+                    WHERE pl.preset_id = ? AND pl.is_warehouse = 1
+                """
+                warehouse_row = execute_read(warehouse_query, (preset_id,), one=True)
+                
+                warehouse = None
+                if warehouse_row:
+                    warehouse = {
+                        'id': warehouse_row['id'],
+                        'lat': warehouse_row['lat'],
+                        'lon': warehouse_row['lon'],
+                        'street': warehouse_row['street'] or '',
+                        'neighborhood': warehouse_row['neighborhood'] or '',
+                        'town': warehouse_row['town'] or '',
+                        'city': warehouse_row['city'] or ''
                     }
                 
-                # Add location to cluster
-                clusters[cluster_id]['locations'].append({
-                    'id': row['id'],
-                    'lat': row['lat'],
-                    'lon': row['lon'],
-                    'street': row['street'],
-                    'neighborhood': row['neighborhood']
-                })
-            else:
-                # Add to noise points (no cluster)
-                noise_points.append({
-                    'id': row['id'],
-                    'lat': row['lat'],
-                    'lon': row['lon'],
-                    'street': row['street'],
-                    'neighborhood': row['neighborhood']
-                })
-        
-        # If there are noise points, add them as a special "cluster"
-        if noise_points:
-            clusters['noise'] = {
-                'id': 'noise',
-                'name': 'Noise Points',
-                'centroid': [0, 0],  # Placeholder
-                'locations': noise_points
-            }
-        
-        # Prepare stats
-        total_locations = sum(len(c['locations']) for c in clusters.values())
-        num_clusters = len(clusters) - (1 if 'noise' in clusters else 0)
-        noise_count = len(noise_points)
-        
-        stats = {
-            'total_locations': total_locations,
-            'num_clusters': num_clusters,
-            'noise_points': noise_count
-        }
-        
-        # Get warehouse if preset_id is specified but we didn't find one
-        if preset_id and not warehouse:
-            warehouse_query = """
-                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city
-                FROM locations l
-                JOIN preset_locations pl ON l.id = pl.location_id
-                WHERE pl.preset_id = ? AND pl.is_warehouse = 1
-            """
-            warehouse_result = execute_read(warehouse_query, (preset_id,), one=True)
-            if warehouse_result:
-                warehouse = {
-                    'id': warehouse_result['id'],
-                    'lat': warehouse_result['lat'],
-                    'lon': warehouse_result['lon'],
-                    'street': warehouse_result['street'],
-                    'neighborhood': warehouse_result['neighborhood'],
-                    'town': warehouse_result['town'],
-                    'city': warehouse_result['city']
+                # Get destinations with simpler query
+                destinations_query = """
+                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood
+                    FROM locations l
+                    JOIN preset_locations pl ON l.id = pl.location_id
+                    WHERE pl.preset_id = ? AND pl.is_warehouse = 0
+                """
+                destination_rows = execute_read(destinations_query, (preset_id,))
+                
+                # Create locations list
+                locations = []
+                for row in destination_rows:
+                    locations.append({
+                        'id': row['id'],
+                        'lat': row['lat'],
+                        'lon': row['lon'],
+                        'street': row['street'] or '',
+                        'neighborhood': row['neighborhood'] or ''
+                    })
+                
+                # Create a single cluster
+                clusters = [{
+                    'id': 'preset-destinations',
+                    'name': preset_row['name'],
+                    'centroid': [0, 0],
+                    'locations': locations
+                }]
+                
+                stats = {
+                    'total_locations': len(locations),
+                    'num_clusters': 1,
+                    'noise_points': 0
                 }
-        
-        return list(clusters.values()), warehouse, stats
+                
+                return clusters, warehouse, stats
+                
+            except Exception as e:
+                print(f"Error in get_clusters with preset_id: {str(e)}")
+                return [], None, {"total_locations": 0, "num_clusters": 0, "noise_points": 0}
+        else:
+            # Original implementation for "All Locations" view
+            query = """
+                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city,
+                       c.id as cluster_id, c.name as cluster_name, 
+                       c.centroid_lat, c.centroid_lon,
+                       pl.is_warehouse
+                FROM locations l
+                LEFT JOIN location_clusters lc ON l.id = lc.location_id
+                LEFT JOIN clusters c ON lc.cluster_id = c.id
+                LEFT JOIN preset_locations pl ON l.id = pl.location_id
+                WHERE (pl.is_warehouse IS NULL OR pl.is_warehouse = 0)
+            """
+            params = []
+            
+            # Execute query
+            results = execute_read(query, params)
+            
+            # Organize results by cluster
+            clusters = {}
+            noise_points = []
+            warehouse = None
+            
+            for row in results:
+                # Check if this is a warehouse
+                if row['is_warehouse'] == 1:
+                    # Store the warehouse separately
+                    warehouse = {
+                        'id': row['id'],
+                        'lat': row['lat'],
+                        'lon': row['lon'],
+                        'street': row['street'],
+                        'neighborhood': row['neighborhood'],
+                        'town': row['town'],
+                        'city': row['city']
+                    }
+                    continue
+                    
+                # If location has a cluster
+                if row['cluster_id']:
+                    cluster_id = row['cluster_id']
+                    
+                    # Initialize cluster if not seen before
+                    if cluster_id not in clusters:
+                        clusters[cluster_id] = {
+                            'id': cluster_id,
+                            'name': row['cluster_name'],
+                            'centroid': [row['centroid_lat'], row['centroid_lon']],
+                            'locations': []
+                        }
+                    
+                    # Add location to cluster
+                    clusters[cluster_id]['locations'].append({
+                        'id': row['id'],
+                        'lat': row['lat'],
+                        'lon': row['lon'],
+                        'street': row['street'],
+                        'neighborhood': row['neighborhood']
+                    })
+                else:
+                    # Add to noise points (no cluster)
+                    noise_points.append({
+                        'id': row['id'],
+                        'lat': row['lat'],
+                        'lon': row['lon'],
+                        'street': row['street'],
+                        'neighborhood': row['neighborhood']
+                    })
+            
+            # If there are noise points, add them as a special "cluster"
+            if noise_points:
+                clusters['noise'] = {
+                    'id': 'noise',
+                    'name': 'Noise Points',
+                    'centroid': [0, 0],  # Placeholder
+                    'locations': noise_points
+                }
+            
+            # Prepare stats
+            total_locations = sum(len(c['locations']) for c in clusters.values())
+            num_clusters = len(clusters) - (1 if 'noise' in clusters else 0)
+            noise_count = len(noise_points)
+            
+            stats = {
+                'total_locations': total_locations,
+                'num_clusters': num_clusters,
+                'noise_points': noise_count
+            }
+            
+            return list(clusters.values()), warehouse, stats
     
     @staticmethod
     def run_clustering_for_preset(preset_id, eps=0.5, min_samples=2):

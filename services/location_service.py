@@ -129,19 +129,51 @@ class LocationService:
                 (preset_id, wh_loc_id)
             )
             
-            # Process destinations with smart clustering
+            # Process destinations
             for dest_lat, dest_lon in destinations:
                 try:
-                    # Try the alternative method first
+                    dest_loc_id = None
+                    cluster_id = None
+                    
+                    # Try geocoding and clustering with better error handling
                     try:
-                        dest_loc_id, cluster_id, is_new_cluster = geocoder.add_location_with_smart_clustering_alt(
+                        result = geocoder.add_location_with_smart_clustering_alt(
                             dest_lat, dest_lon, wh_lat, wh_lon
                         )
-                    except (ImportError, AttributeError):
-                        # If alt method not available, fall back to original
-                        dest_loc_id, cluster_id, is_new_cluster = geocoder.add_location_with_smart_clustering(
-                            dest_lat, dest_lon, wh_lat, wh_lon
+                        if result and isinstance(result, tuple) and len(result) == 3:
+                            dest_loc_id, cluster_id, is_new_cluster = result
+                        else:
+                            print(f"Smart clustering alt returned invalid result: {result}")
+                    except (ImportError, AttributeError, ValueError, TypeError) as e:
+                        print(f"Smart clustering alt failed: {str(e)}")
+                        try:
+                            result = geocoder.add_location_with_smart_clustering(
+                                dest_lat, dest_lon, wh_lat, wh_lon
+                            )
+                            if result and isinstance(result, tuple) and len(result) == 3:
+                                dest_loc_id, cluster_id, is_new_cluster = result
+                            else:
+                                print(f"Smart clustering returned invalid result: {result}")
+                        except (ImportError, AttributeError, ValueError, TypeError) as e:
+                            print(f"Smart clustering failed: {str(e)}")
+                    
+                    # If smart clustering failed, use direct DB insertion
+                    if not dest_loc_id:
+                        # Check if location exists
+                        existing_dest = execute_read(
+                            "SELECT id FROM locations WHERE ABS(lat - ?) < 0.0001 AND ABS(lon - ?) < 0.0001",
+                            (dest_lat, dest_lon),
+                            one=True
                         )
+                        
+                        if existing_dest:
+                            dest_loc_id = existing_dest['id']
+                        else:
+                            # Insert new location
+                            dest_loc_id = execute_write(
+                                "INSERT INTO locations (lat, lon, created_at) VALUES (?, ?, datetime('now'))",
+                                (dest_lat, dest_lon)
+                            )
                     
                     if dest_loc_id:
                         # Add to preset_locations with is_warehouse=0
@@ -149,8 +181,10 @@ class LocationService:
                             "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 0)",
                             (preset_id, dest_loc_id)
                         )
+                        print(f"Successfully added location {dest_loc_id} to preset {preset_id}")
                     else:
-                        print(f"Warning: Failed to add location ({dest_lat}, {dest_lon}) to database")
+                        print(f"Failed to add location ({dest_lat}, {dest_lon}) to preset")
+                        
                 except Exception as e:
                     print(f"Error processing destination ({dest_lat}, {dest_lon}): {str(e)}")
             

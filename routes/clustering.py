@@ -61,12 +61,10 @@ def run_clustering():
 @clustering_bp.route('/get_presets_for_clustering', methods=['GET'])
 def get_presets_for_clustering():
     """Get presets with geocoded info for clustering visualization"""
-    print("Endpoint called: get_presets_for_clustering")
     try:
-        # Use the simple function instead of ORM
-        presets_data = PresetService.get_all_presets_basic()
-        return jsonify({"presets": presets_data})
+        presets = PresetService.get_all_presets_basic()
+        return jsonify({"presets": presets, "status": "success"})
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"presets": [], "status": "error", "message": str(e)})

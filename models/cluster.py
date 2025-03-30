@@ -12,8 +12,8 @@ class Cluster(db.Model):
     centroid_lon = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    # Relationships
-    locations = db.relationship('Location', backref='cluster')
+    # Change backref to back_populates
+    locations = db.relationship('Location', back_populates='cluster')
     
     def __repr__(self):
         return f"<Cluster {self.id}: {self.name}>"
