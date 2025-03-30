@@ -4,25 +4,20 @@ from openrouteservice.distance_matrix import distance_matrix
 import requests
 import json
 import os
+import random
+import time
 import sqlite3
-from pathlib import Path
+import re  # Import the re module for regular expressions
+from utils.database import execute_read, execute_write, execute_many
 
 class GeoDBSCAN:
     """
     Enhanced DBSCAN algorithm with geocoding and location database integration
     Works with SQLAlchemy models
     """
-    def __init__(self, eps=0.5, min_samples=2, api_key=None, distance_metric='distance', 
-                 db_path='locations.db'):
+    def __init__(self, eps=0.5, min_samples=2, api_key=None, distance_metric='distance'):
         """
         Initialize the GeoDBSCAN algorithm with location database support.
-        
-        Args:
-            eps (float): The maximum distance in kilometers
-            min_samples (int): The minimum number of samples to form a cluster
-            api_key (str): OpenRouteService API key
-            distance_metric (str): 'distance' or 'duration'
-            db_path (str): Path to the SQLite database file
         """
         self.eps = eps * 1000  # Convert to meters for OpenRouteService
         self.min_samples = min_samples
@@ -32,7 +27,6 @@ class GeoDBSCAN:
         self.intersection_points = {}
         self.api_key = api_key
         self.distance_metric = distance_metric
-        self.db_path = db_path
         
         # Initialize the ORS client if API key is provided
         if self.api_key:
@@ -41,24 +35,9 @@ class GeoDBSCAN:
             self.client = None
     
     def geocode_location(self, lat, lon, max_retries=3):
-        """
-        Geocode a location to get address components using Nominatim
-        
-        Args:
-            lat (float): Latitude
-            lon (float): Longitude
-            max_retries (int): Maximum number of retry attempts
-            
-        Returns:
-            dict: Address components or None if geocoding failed
-        """
-        import requests
-        import time
-        import random
-        
+        """Geocode a location to get address components using Nominatim"""
         for attempt in range(max_retries):
             try:
-                # Use Nominatim API
                 response = requests.get(
                     f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=18&addressdetails=1",
                     headers={"User-Agent": "python-clustering-app"}
@@ -81,7 +60,6 @@ class GeoDBSCAN:
                     return result
                 
                 elif response.status_code == 429:  # Too Many Requests
-                    # Exponential backoff
                     wait_time = (2 ** attempt) + random.uniform(0, 1)
                     print(f"Rate limited by Nominatim, waiting {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
@@ -89,54 +67,41 @@ class GeoDBSCAN:
                     
                 else:
                     print(f"Geocoding error: {response.status_code} - {response.text}")
-                    time.sleep(1)  # Brief pause before retry
+                    time.sleep(1)
                     
             except Exception as e:
                 print(f"Geocoding exception: {str(e)}")
-                time.sleep(1)  # Brief pause before retry
+                time.sleep(1)
         
         print(f"Failed to geocode location after {max_retries} attempts: {lat}, {lon}")
         return None
     
     def add_location_to_db(self, lat, lon, address=None):
-        """
-        Add a location to the database with its geocoded information
-        
-        Args:
-            lat (float): Latitude
-            lon (float): Longitude
-            address (dict, optional): Pre-geocoded address components
-            
-        Returns:
-            int: Location ID in the database
-        """
+        """Add a location to the database with its geocoded information"""
         if address is None:
             address = self.geocode_location(lat, lon)
             if address is None:
                 print(f"WARNING: Failed to geocode location ({lat}, {lon})")
             else:
                 print(f"Successfully geocoded ({lat}, {lon}) to {address.get('street', 'unknown street')}")
-            
+        
         if address:
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
+            # Check if location exists
+            existing = execute_read(
+                "SELECT id FROM locations WHERE lat = ? AND lon = ?",
+                (lat, lon),
+                one=True
+            )
             
-            # Check if this location already exists
-            c.execute('''
-                SELECT id FROM locations
-                WHERE lat = ? AND lon = ?
-            ''', (lat, lon))
+            if existing:
+                return existing['id']
             
-            result = c.fetchone()
-            
-            if result:
-                location_id = result[0]
-            else:
-                # Insert new location
-                c.execute('''
-                    INSERT INTO locations (lat, lon, street, neighborhood, town, city, postcode, country)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
+            # Insert new location
+            location_id = execute_write(
+                """INSERT INTO locations 
+                   (lat, lon, street, neighborhood, town, city, postcode, country)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
                     lat, lon, 
                     address.get('street', ''),
                     address.get('neighborhood', ''),
@@ -144,12 +109,8 @@ class GeoDBSCAN:
                     address.get('city', ''),
                     address.get('postcode', ''),
                     address.get('country', '')
-                ))
-                
-                location_id = c.lastrowid
-                
-            conn.commit()
-            conn.close()
+                )
+            )
             
             return location_id
         
@@ -207,6 +168,7 @@ class GeoDBSCAN:
             list: List of intersection points
         """
         if self.client is None:
+            print("No OpenRouteService client available - cannot identify intersections")
             return []
             
         try:
@@ -223,7 +185,11 @@ class GeoDBSCAN:
             geometry = route['features'][0]['geometry']
             coords = geometry['coordinates']
             
-            # Identify potential intersection points (simplified)
+            if len(coords) < 3:
+                print(f"Route too short to identify intersections: {len(coords)} points")
+                return []
+            
+            # Identify potential intersection points
             intersections = []
             last_bearing = None
             
@@ -237,19 +203,167 @@ class GeoDBSCAN:
                 # If significant bearing change, mark as intersection
                 if last_bearing is not None and abs(bearing - last_bearing) > 30:
                     intersections.append({
-                        'lon': coords[i-1][0],
-                        'lat': coords[i-1][1],
+                        'lat': coords[i-1][1],  # Fix coordinate order (lat/lon)
+                        'lon': coords[i-1][0], 
                         'position': i-1
                     })
                     
                 last_bearing = bearing
             
+            print(f"Identified {len(intersections)} intersections on route")
             return intersections
             
         except Exception as e:
             print(f"Error identifying intersections: {str(e)}")
             return []
     
+    def identify_road_transitions(self, lat, lon, warehouse_lat, warehouse_lon):
+        """
+        Find transitions between road types on the route from location to warehouse
+        to identify potential security checkpoints
+        
+        Args:
+            lat (float): Location latitude
+            lon (float): Location longitude
+            warehouse_lat (float): Warehouse latitude
+            warehouse_lon (float): Warehouse longitude
+            
+        Returns:
+            list: List of transition points with road type information
+        """
+        if self.client is None:
+            print("No OpenRouteService client available - cannot identify road transitions")
+            return []
+            
+        try:
+            # Get detailed directions from location to warehouse
+            coords = [[lon, lat], [warehouse_lon, warehouse_lat]]
+            
+            # Request detailed route info including road types
+            route = self.client.directions(
+                coordinates=coords,
+                profile='driving-car',
+                format='geojson',
+                extra_info=['waycategory', 'waytype'],  # Include road category info
+                geometry_simplify=False  # Keep full detail
+            )
+            
+            # Extract segments with road classification
+            waypoints = route['features'][0]['geometry']['coordinates']
+            segments = route['features'][0]['properties']['segments'][0]['steps']
+            
+            transitions = []
+            current_road_type = None
+            
+            for step in segments:
+                # Extract road type from step info
+                # OpenRouteService classifies roads similarly to OSM
+                road_type = self._get_road_class(step)
+                
+                # If road type changes, this is a transition point
+                if current_road_type and road_type != current_road_type:
+                    # This is a transition point - get coordinates
+                    transition_point_idx = step['way_points'][0]
+                    if 0 <= transition_point_idx < len(waypoints):
+                        point = waypoints[transition_point_idx]
+                        
+                        # Record transition (residential→tertiary or tertiary→secondary are important)
+                        transitions.append({
+                            'lat': point[1],  # Convert from [lon, lat] to [lat, lon]
+                            'lon': point[0],
+                            'from_type': current_road_type,
+                            'to_type': road_type,
+                            'position': transition_point_idx,
+                            'is_potential_checkpoint': self._is_security_checkpoint_transition(current_road_type, road_type)
+                        })
+                        
+                        print(f"Road transition: {current_road_type} → {road_type} at [{point[1]}, {point[0]}]")
+                
+                current_road_type = road_type
+            
+            # Find most likely security checkpoint from all transitions
+            security_checkpoints = [t for t in transitions if t.get('is_potential_checkpoint')]
+            
+            # Closest transition to origin is most likely the security checkpoint
+            if security_checkpoints:
+                print(f"Found {len(security_checkpoints)} potential security checkpoints")
+                # Sort by position (earlier in route = closer to origin = more likely checkpoint)
+                security_checkpoints.sort(key=lambda x: x['position'])
+                return security_checkpoints
+            
+            return transitions
+            
+        except Exception as e:
+            print(f"Error identifying road transitions: {str(e)}")
+            return []
+
+    def _get_road_class(self, step):
+        """Extract the road classification from route step"""
+        # The actual field might vary depending on the ORS API version
+        if 'highway_class' in step:
+            return step['highway_class']
+        elif 'road_class' in step:
+            return step['road_class']
+        elif 'type' in step:
+            return step['type']
+        
+        # If no specific class, try to infer from name
+        name = step.get('name', '').lower()
+        if 'motorway' in name or 'highway' in name:
+            return 'motorway'
+        elif 'trunk' in name:
+            return 'trunk'
+        elif 'primary' in name:
+            return 'primary'
+        elif 'secondary' in name:
+            return 'secondary'
+        elif 'tertiary' in name:
+            return 'tertiary'
+        elif 'residential' in name or 'jalan' in name:
+            return 'residential'
+        elif 'service' in name:
+            return 'service'
+        else:
+            return 'unclassified'
+
+    def _is_security_checkpoint_transition(self, from_type, to_type):
+        """
+        Determine if a road transition is likely to be a security checkpoint
+        
+        Most security checkpoints are at transitions from residential to higher class roads
+        """
+        # Road hierarchy from smallest to largest
+        hierarchy = [
+            'service', 
+            'living_street',
+            'residential', 
+            'unclassified',
+            'tertiary', 
+            'secondary', 
+            'primary', 
+            'trunk', 
+            'motorway'
+        ]
+        
+        # Get positions in hierarchy
+        try:
+            from_index = hierarchy.index(from_type)
+            to_index = hierarchy.index(to_type)
+        except ValueError:
+            return False
+        
+        # Check if going from smaller to larger road class
+        # Security checkpoints are typically at:
+        # 1. residential → tertiary
+        # 2. residential → secondary
+        # 3. tertiary → secondary
+        if from_type == 'residential' and to_type in ['tertiary', 'secondary', 'primary']:
+            return True
+        if from_type == 'tertiary' and to_type in ['secondary', 'primary']:
+            return True
+        
+        return False
+
     def save_preset_with_clustering(self, preset_id, preset_name, warehouse, destinations):
         """
         Save a preset with all locations geocoded and clustered
@@ -454,7 +568,7 @@ class GeoDBSCAN:
         """Create centroid points for each cluster as intersection points"""
         n_clusters = self.n_clusters_
         
-        for cluster_idx in range(n_clusters):
+        for cluster_idx in n_clusters:
             # Get points in this cluster
             cluster_mask = self.labels_ == cluster_idx
             cluster_points = np.array([X[i] for i, is_member in enumerate(cluster_mask) if is_member])
@@ -468,8 +582,7 @@ class GeoDBSCAN:
 
     def add_location_with_smart_clustering(self, lat, lon, warehouse_lat, warehouse_lon):
         """
-        Add a location to the database with smart clustering based on street/neighborhood
-        and route intersection analysis
+        Add a location to the database with smart clustering based on street pattern matching
         
         Args:
             lat (float): Latitude
@@ -478,223 +591,213 @@ class GeoDBSCAN:
             warehouse_lon (float): Warehouse longitude
             
         Returns:
-            tuple: (location_id, cluster_id, is_new_cluster)
+            tuple: (location_id, cluster_id, is_new_cluster, checkpoint)
         """
-        # First geocode the location
+        from repositories.location_repository import LocationRepository
+        from repositories.cluster_repository import ClusterRepository
+        
+        # Geocode the location to get address components
         address = self.geocode_location(lat, lon)
         if not address:
             print(f"Warning: Could not geocode location ({lat}, {lon}) - creating without address data")
             address = {'street': '', 'neighborhood': '', 'town': '', 'city': '', 'postcode': '', 'country': ''}
         
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
         try:
-            # Start transaction
-            conn.execute("BEGIN")
+            # Check if location exists
+            existing_loc = LocationRepository.find_by_coordinates(lat, lon)
             
-            # Check if this location already exists
-            c.execute('''
-                SELECT id FROM locations
-                WHERE ABS(lat - ?) < 0.0001 AND ABS(lon - ?) < 0.0001
-            ''', (lat, lon))
-            
-            result = c.fetchone()
-            
-            if result:
-                # Location already exists, get its cluster
-                location_id = result[0]
+            if existing_loc:
+                # Existing location logic
+                location_id = existing_loc['id']
+                LocationRepository.update_address(location_id, address)
                 
-                c.execute('''
-                    SELECT cluster_id FROM location_clusters
-                    WHERE location_id = ?
-                ''', (location_id,))
-                
-                cluster_result = c.fetchone()
-                cluster_id = cluster_result[0] if cluster_result else None
-                
-                # If it has address info, make sure it's complete
-                if address:
-                    c.execute('''
-                        UPDATE locations SET 
-                        street = COALESCE(street, ?),
-                        neighborhood = COALESCE(neighborhood, ?),
-                        town = COALESCE(town, ?),
-                        city = COALESCE(city, ?),
-                        postcode = COALESCE(postcode, ?),
-                        country = COALESCE(country, ?)
-                        WHERE id = ?
-                    ''', (
-                        address.get('street', ''),
-                        address.get('neighborhood', ''),
-                        address.get('town', ''),
-                        address.get('city', ''),
-                        address.get('postcode', ''),
-                        address.get('country', ''),
-                        location_id
-                    ))
-                
-                conn.commit()
-                return location_id, cluster_id, False
-                
-            # Location doesn't exist, add it
-            c.execute('''
-                INSERT INTO locations (lat, lon, street, neighborhood, town, city, postcode, country)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                lat, lon, 
-                address.get('street', ''),
-                address.get('neighborhood', ''),
-                address.get('town', ''),
-                address.get('city', ''),
-                address.get('postcode', ''),
-                address.get('country', '')
-            ))
-            
-            location_id = c.lastrowid
-            
-            # Find intersections for this new location
-            new_location_intersections = self.identify_intersections_for_location(
-                lat, lon, warehouse_lat, warehouse_lon
-            )
-            
-            # Store the new location's route intersections
-            new_intersection_ids = []
-            for intersection in new_location_intersections:
-                # Check if intersection already exists
-                c.execute('''
-                    SELECT id FROM intersections 
-                    WHERE ABS(lat - ?) < 0.0001 AND ABS(lon - ?) < 0.0001
-                ''', (intersection['lat'], intersection['lon']))
-                
-                result = c.fetchone()
-                
-                if result:
-                    intersection_id = result[0]
-                else:
-                    c.execute(
-                        "INSERT INTO intersections (lat, lon) VALUES (?, ?)",
-                        (intersection['lat'], intersection['lon'])
-                    )
-                    intersection_id = c.lastrowid
-                
-                # Link intersection to location
-                c.execute(
-                    "INSERT INTO location_intersections (location_id, intersection_id, position) VALUES (?, ?, ?)",
-                    (location_id, intersection_id, intersection['position'])
+                cluster_info = execute_read(
+                    "SELECT cluster_id FROM location_clusters WHERE location_id = ?", 
+                    (location_id,), 
+                    one=True
                 )
                 
-                new_intersection_ids.append(intersection_id)
+                return location_id, cluster_info['cluster_id'] if cluster_info else None, False, None
+                
+            # Insert new location
+            location_id = LocationRepository.insert(lat, lon, address)
             
-            # STEP 1: Find existing locations with the same street or neighborhood
+            # Get street info for clustering
             street = address.get('street', '')
-            neighborhood = address.get('neighborhood', '')
             
-            matching_query = '''
-                SELECT l.id, lc.cluster_id 
-                FROM locations l
-                LEFT JOIN location_clusters lc ON l.id = lc.location_id
-                WHERE ((l.street = ? AND l.street != '') OR (l.neighborhood = ? AND l.neighborhood != ''))
-                    AND l.id != ?
-            '''
+            # Extract development pattern from street name - key for smarter clustering
+            development_pattern = self._extract_development_pattern(street) if street else None
             
-            c.execute(matching_query, (street, neighborhood, location_id))
-            matching_locations = c.fetchall()
+            matches = []
+            match_type = None
             
+            # STEP 1: First try exact street match (highest priority)
+            if street:
+                street_matches = LocationRepository.find_matching_street(street, location_id)
+                if street_matches:
+                    matches.extend(street_matches)
+                    match_type = "exact_street"
+                    print(f"Found {len(street_matches)} locations with exact street match: {street}")
+            
+            # STEP 2: If no exact street match, look for development pattern match
+            if not matches and development_pattern:
+                pattern_matches = LocationRepository.find_pattern_matches(development_pattern, location_id)
+                if pattern_matches:
+                    matches.extend(pattern_matches)
+                    match_type = "development_pattern"
+                    print(f"Found {len(pattern_matches)} locations with development pattern match: {development_pattern}")
+            
+            # Clustering logic
             cluster_id = None
             is_new_cluster = False
             
-            if matching_locations:
-                # We have found locations in the same street/neighborhood
+            if matches:
+                # Use the first match that has a cluster assigned
+                for match in matches:
+                    if match['cluster_id']:
+                        cluster_id = match['cluster_id']
+                        print(f"Assigning to existing cluster: {cluster_id} based on {match_type} match")
+                        break
                 
-                best_matching_location_id = None
-                best_matching_cluster_id = None
-                best_intersection_match_count = 0
-                
-                # STEP 2: For each matching location, compare routes
-                for match_id, match_cluster_id in matching_locations:
-                    # Get this location's route intersections
-                    c.execute('''
-                        SELECT intersection_id 
-                        FROM location_intersections
-                        WHERE location_id = ?
-                        ORDER BY position
-                    ''', (match_id,))
-                    
-                    match_intersection_ids = [row[0] for row in c.fetchall()]
-                    
-                    # Count how many intersections match with our new location
-                    common_intersections = set(new_intersection_ids).intersection(set(match_intersection_ids))
-                    match_count = len(common_intersections)
-                    
-                    # If this is the best match so far, save it
-                    if match_count > best_intersection_match_count:
-                        best_intersection_match_count = match_count
-                        best_matching_location_id = match_id
-                        best_matching_cluster_id = match_cluster_id
-                
-                # STEP 3: Decide which cluster to use based on route comparison
-                if best_matching_cluster_id is not None:
-                    # Use the existing cluster with the best route match
-                    cluster_id = best_matching_cluster_id
-                    
-                    # Link location to this cluster
-                    c.execute(
-                        "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                        (location_id, cluster_id)
-                    )
-                else:
-                    # No good cluster match found, create a new cluster
+                # If no match has a cluster, create one for all matches
+                if not cluster_id:
+                    # Create a new cluster with pattern-based naming
                     is_new_cluster = True
                     
-                    # Generate cluster name based on location address
-                    cluster_name = neighborhood if neighborhood else (street if street else "Cluster")
+                    # Generate cluster name based on the development pattern
+                    cluster_name = development_pattern or self._extract_street_pattern(street)
                     
-                    c.execute(
-                        "INSERT INTO clusters (name, centroid_lat, centroid_lon) VALUES (?, ?, ?)",
-                        (cluster_name, lat, lon)
-                    )
+                    cluster_id = ClusterRepository.create(cluster_name, lat, lon)
+                    print(f"Created new cluster: {cluster_id} ({cluster_name}) for {match_type} match")
                     
-                    cluster_id = c.lastrowid
-                    
-                    # Link location to the new cluster
-                    c.execute(
-                        "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                        (location_id, cluster_id)
-                    )
+                    # Assign all matches to this cluster
+                    for match in matches:
+                        ClusterRepository.add_location_to_cluster(match['id'], cluster_id)
             else:
-                # No matching locations found, create a new cluster
+                # No matches - create a new cluster with street-based naming
                 is_new_cluster = True
                 
-                # Generate cluster name based on location address
-                cluster_name = neighborhood if neighborhood else (street if street else "Cluster")
+                # Determine best name for new cluster
+                if development_pattern:
+                    cluster_name = development_pattern
+                elif street:
+                    cluster_name = self._extract_street_pattern(street)
+                else:
+                    cluster_name = "Unknown Location"
                 
-                c.execute(
-                    "INSERT INTO clusters (name, centroid_lat, centroid_lon) VALUES (?, ?, ?)",
-                    (cluster_name, lat, lon)
-                )
-                
-                cluster_id = c.lastrowid
-                
-                # Link location to the new cluster
-                c.execute(
-                    "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                    (location_id, cluster_id)
-                )
+                cluster_id = ClusterRepository.create(cluster_name, lat, lon)
+                print(f"Created new cluster: {cluster_id} ({cluster_name}) - no matches")
             
-            # Commit all changes
-            conn.commit()
-            
-            return location_id, cluster_id, is_new_cluster
+            # Add the location to its cluster
+            if cluster_id:
+                ClusterRepository.add_location_to_cluster(location_id, cluster_id)
             
         except Exception as e:
-            conn.rollback()
-            print(f"Error adding location with smart clustering: {str(e)}")
-            return None, None, False
+            import traceback
+            traceback.print_exc()
+            print(f"Error in smart clustering: {str(e)}")
+            return None, None, False, None
+
+    def _extract_street_pattern(self, street):
+        """
+        Extract a meaningful pattern from street names for cluster naming
+        
+        Args:
+            street (str): Full street name
             
-        finally:
-            conn.close()
-    
+        Returns:
+            str: Extracted pattern suitable for cluster naming
+        """
+        if not street:
+            return "Unknown"
+        
+        # Remove common prefixes like "Jalan", "Lorong", etc.
+        prefixes = ["jalan ", "jln ", "lorong ", "persiaran ", "lebuh "]
+        street_lower = street.lower()
+        
+        for prefix in prefixes:
+            if street_lower.startswith(prefix):
+                street = street[len(prefix):]
+                break
+        
+        # Split by common separators
+        parts = street.split()
+        
+        # For multi-part street names like "Setia Nusantara U13/22T"
+        if len(parts) >= 2:
+            # If it has a section/identifier pattern (like U13/22T), remove that part
+            last_part = parts[-1]
+            if ('/' in last_part) or (last_part[0].upper() == 'U' and last_part[1:].isdigit()):
+                parts = parts[:-1]
+            
+            # Take up to first 3 parts for reasonable length
+            if len(parts) > 3:
+                parts = parts[:3]
+            
+            return ' '.join(parts).title()
+        
+        return street.title()
+
+    def _extract_development_pattern(self, street):
+        """
+        Extract housing development name from street patterns
+        
+        Args:
+            street (str): Street name like "Jalan Setia Nusantara U13/22T"
+            
+        Returns:
+            str: Development name like "Setia Nusantara"
+        """
+        if not street:
+            return None
+            
+        street_lower = street.lower()
+        
+        # Remove common prefixes
+        prefixes = ["jalan ", "jln ", "lorong ", "persiaran ", "lebuh ", "lebuhraya "]
+        for prefix in prefixes:
+            if street_lower.startswith(prefix):
+                street = street[len(prefix):]
+                break
+        
+        # Handle special patterns in Malaysian addresses
+        
+        # Pattern 1: Development with section numbers (common in Shah Alam, Setia Alam, etc.)
+        # Example: "Setia Nusantara U13/22T" -> "Setia Nusantara"
+        section_pattern = r'(.+?)\s+(?:U\d+|\d+/\d+|S\d+|Section \d+)'
+        section_match = re.search(section_pattern, street, re.IGNORECASE)
+        if section_match:
+            return section_match.group(1).strip().title()
+        
+        # Pattern 2: Development with numbered streets (common in Taman areas)
+        # Example: "Mawar 1" -> "Mawar"
+        numbered_street_pattern = r'(.+?)\s+\d+\s*$'
+        numbered_match = re.search(numbered_street_pattern, street, re.IGNORECASE)
+        if numbered_match:
+            return numbered_match.group(1).strip().title()
+        
+        # Pattern 3: Extract Taman name if present
+        # Example: "Taman Sri Muda 25/1" -> "Sri Muda"
+        taman_pattern = r'taman\s+(.+?)(?:\s+\d|\s*$)'
+        taman_match = re.search(taman_pattern, street_lower, re.IGNORECASE)
+        if taman_match:
+            return taman_match.group(1).strip().title()
+        
+        # Pattern 4: Housing estates with "Apartment", "Kondominium", "Residensi", etc.
+        residence_pattern = r'((?:apartment|kondominium|residensi|residency|condo|condominium)\s+.+?)(?:\s+\d|\s*$)'
+        residence_match = re.search(residence_pattern, street_lower, re.IGNORECASE)
+        if residence_match:
+            return residence_match.group(1).strip().title()
+        
+        # If no specific pattern matches, take the first 2 words
+        words = street.split()
+        if len(words) >= 2:
+            return ' '.join(words[:2]).title()
+        elif len(words) == 1:
+            return words[0].title()
+            
+        return street.title()
+
     def compare_routes(self, route1_intersections, route2_intersections):
         """
         Compare two routes based on their intersections

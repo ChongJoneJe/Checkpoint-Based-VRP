@@ -9,9 +9,25 @@ def ensure_db_exists():
     """Make sure database file exists"""
     os.makedirs('static/data', exist_ok=True)
     if not os.path.exists(DB_PATH):
-        # Initialize empty database with schema
+        # Import and use the reset_db functionality instead of recreating schema here
+        from reset_db import reset_database
+        reset_database()
+
+@contextmanager
+def transaction():
+    """Context manager for database transactions"""
+    conn = None
+    try:
         conn = get_connection()
-        conn.close()
+        yield conn
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if conn:
+            conn.close()
 
 @contextmanager
 def get_db():
@@ -91,3 +107,8 @@ def execute_many(query, params_list):
         except Exception as e:
             conn.rollback()
             raise e
+
+def execute_transaction(func):
+    """Execute a function with multiple database operations in a transaction"""
+    with transaction() as conn:
+        return func(conn)

@@ -3,11 +3,38 @@ let clusterMarkers = [];
 let warehouseMarker = null;
 let currentPreset = 'all';
 
-// Colors for clusters (add more as needed)
+// More color options for visualizing clusters
 const clusterColors = [
-    '#3388ff', '#ff3333', '#33cc33', '#ff9900', '#9966ff',
-    '#ff66cc', '#99cc00', '#00ccff', '#ff6600', '#9933ff',
-    '#33cc99', '#ff9966', '#6699ff', '#cc66ff', '#ffcc00'
+    '#FF5733', // Red-Orange
+    '#33A8FF', // Blue
+    '#45FF33', // Green
+    '#F033FF', // Purple
+    '#FFE033', // Yellow
+    '#33FFF6', // Cyan
+    '#FF33A8', // Pink
+    '#8C33FF', // Violet
+    '#FF8C33', // Orange
+    '#33FF8C', // Mint
+    '#FF3333', // Red
+    '#3361FF', // Royal Blue
+    '#33FF61', // Light Green
+    '#DA33FF', // Magenta
+    '#FFDA33', // Gold
+    '#33FFE0', // Turquoise
+    '#FF3380', // Rose
+    '#8CFF33', // Lime
+    '#FF6E33', // Coral
+    '#338CFF', // Cobalt
+    '#B6FF33', // Yellow-Green
+    '#FF33DA', // Hot Pink
+    '#5733FF', // Indigo
+    '#33FFB6', // Aquamarine
+    '#FF5733', // Vermilion
+    '#33D4FF', // Sky Blue
+    '#57FF33', // Chartreuse
+    '#FF33D4', // Fuchsia
+    '#FF8C33', // Amber
+    '#338CFF'  // Azure
 ];
 
 // Initialize map
@@ -37,31 +64,6 @@ function initMap() {
 }
 
 // Load presets for the dropdown
-function loadPresets() {
-    console.log("Loading presets...");
-    
-    fetch('/clustering/get_presets_for_clustering')
-        .then(response => {
-            console.log("Response status:", response.status);
-            return response.json();
-        })
-        .then(data => {
-            console.log("Response data:", data);
-            
-            // Does data.presets exist?
-            console.log("Presets array:", data.presets);
-            
-            // If it exists, iterate through presets
-            if (data.presets && data.presets.length > 0) {
-                data.presets.forEach(preset => {
-                    console.log("Processing preset:", preset);
-                    // Rest of your code...
-                });
-            }
-        })
-        .catch(error => console.error("Error loading presets:", error));
-}
-
 function loadPresets() {
     console.log("Loading presets...");
     
@@ -161,23 +163,32 @@ function displayClusters(clusters) {
         const clusterId = cluster.id || index;
         const clusterColor = clusterColors[index % clusterColors.length];
         
+        // No need for city prefix anymore - use the cluster name directly
+        const displayName = cluster.name || `Cluster ${clusterId}`;
+        
+        // Find common streets and neighborhoods safely
+        let commonStreet = findCommonValue(cluster.locations, 'street');
+        let commonNeighborhood = findCommonValue(cluster.locations, 'neighborhood');
+        
         // Add cluster info to sidebar
         const clusterElement = document.createElement('div');
         clusterElement.className = 'cluster-item';
+        
         clusterElement.innerHTML = `
             <h4>
                 <span class="color-sample" style="background-color: ${clusterColor}"></span>
-                Cluster ${clusterId}
+                ${displayName}
                 <span class="location-count">(${cluster.locations.length} locations)</span>
             </h4>
             <div class="cluster-details">
                 <p>Centroid: ${cluster.centroid[0].toFixed(4)}, ${cluster.centroid[1].toFixed(4)}</p>
-                ${cluster.name ? `<p>Region: ${cluster.name}</p>` : ''}
+                ${commonStreet ? `<p><strong>Common Street:</strong> ${commonStreet}</p>` : ''}
+                ${commonNeighborhood ? `<p><strong>Neighborhood:</strong> ${commonNeighborhood}</p>` : ''}
             </div>
         `;
         clusterListElement.appendChild(clusterElement);
         
-        // Add markers for this cluster
+        // Add markers for this cluster - unchanged
         cluster.locations.forEach(location => {
             // Create marker with custom icon
             const marker = L.circleMarker([location.lat, location.lon], {
@@ -192,9 +203,10 @@ function displayClusters(clusters) {
             // Add popup with location details
             const popupContent = `
                 <strong>Location ID: ${location.id}</strong><br>
-                Cluster: ${clusterId}<br>
+                Cluster: ${displayName}<br>
                 ${location.street ? `Street: ${location.street}<br>` : ''}
                 ${location.neighborhood ? `Neighborhood: ${location.neighborhood}<br>` : ''}
+                ${location.city ? `City: ${location.city}<br>` : ''}
                 Coordinates: ${location.lat.toFixed(5)}, ${location.lon.toFixed(5)}
             `;
             marker.bindPopup(popupContent);
@@ -211,6 +223,84 @@ function displayClusters(clusters) {
     if (clusterMarkers.length > 0) {
         map.fitBounds(bounds, { padding: [50, 50] });
     }
+    
+    // At the end, add:
+    displayCheckpoints(clusters);
+}
+
+// Helper function to find the most common value
+function findCommonValue(items, propertyName) {
+    if (!items || !items.length) return null;
+    
+    // Count occurrences of each value
+    const counts = {};
+    let maxCount = 0;
+    let maxValue = null;
+    
+    items.forEach(item => {
+        const value = item[propertyName];
+        if (!value) return;
+        
+        counts[value] = (counts[value] || 0) + 1;
+        
+        if (counts[value] > maxCount) {
+            maxCount = counts[value];
+            maxValue = value;
+        }
+    });
+    
+    return maxValue;
+}
+
+// Add this function to display checkpoints on the map
+function displayCheckpoints(clusters) {
+    clusters.forEach((cluster, index) => {
+        if (cluster.checkpoint_lat && cluster.checkpoint_lon) {
+            // Create a special marker for checkpoints
+            const checkpoint = L.marker([cluster.checkpoint_lat, cluster.checkpoint_lon], {
+                icon: L.divIcon({
+                    className: 'checkpoint-marker',
+                    html: '<div class="checkpoint-icon">✓</div>',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                })
+            }).addTo(map);
+            
+            const clusterColor = clusterColors[index % clusterColors.length];
+            
+            // Determine the best name to display (for consistency)
+            let displayName = cluster.name || `Cluster ${cluster.id || index}`;
+            
+            // Add popup with checkpoint details
+            checkpoint.bindPopup(`
+                <div class="checkpoint-popup">
+                    <h4>Security Checkpoint</h4>
+                    <p>For Cluster: ${displayName}</p>
+                    <p>Coordinates: ${cluster.checkpoint_lat.toFixed(5)}, ${cluster.checkpoint_lon.toFixed(5)}</p>
+                </div>
+            `);
+            
+            // Draw a line from checkpoint to warehouse if warehouse exists
+            if (warehouseMarker) {
+                const warehouselatlng = warehouseMarker.getLatLng();
+                const checkpointLine = L.polyline([
+                    [cluster.checkpoint_lat, cluster.checkpoint_lon],
+                    [warehouselatlng.lat, warehouselatlng.lng]
+                ], {
+                    color: clusterColor,
+                    weight: 3,
+                    opacity: 0.6,
+                    dashArray: '10, 10'
+                }).addTo(map);
+                
+                // Store for later removal
+                clusterMarkers.push(checkpointLine);
+            }
+            
+            // Store for later removal
+            clusterMarkers.push(checkpoint);
+        }
+    });
 }
 
 // Display warehouse on the map if available

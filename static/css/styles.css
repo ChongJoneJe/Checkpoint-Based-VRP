@@ -283,10 +283,13 @@ body, html {
 
 /* Map marker styles */
 .warehouse-icon {
-    width: 18px;
-    height: 18px;
-    background-color: #343a40;
+    width: 20px;
+    height: 20px;
+    background-color: #49525a;
     border: 3px solid white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border-radius: 50%;
     box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
 }
@@ -544,16 +547,6 @@ header {
     text-shadow: 1px 1px 1px white;
 }
 
-/* Map marker styles (duplicated from map_picker.css) */
-.warehouse-icon {
-    width: 18px;
-    height: 18px;
-    background-color: #343a40;
-    border: 3px solid white;
-    border-radius: 50%;
-    box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
-}
-
 .destination-icon {
     width: 18px;
     height: 18px;
@@ -582,4 +575,49 @@ header {
 .warehouse-popup h4 {
     margin-top: 0;
     color: #ff6600;
+}
+
+/* Add more styling for enhanced cluster display */
+.color-sample {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.location-count {
+    font-size: 0.85em;
+    color: #666;
+    margin-left: 6px;
+}
+
+.cluster-details {
+    padding: 8px;
+    margin-top: 5px;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.cluster-item {
+    margin-bottom: 15px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+.cluster-item h4 {
+    margin-bottom: 5px;
+    display: flex;
+    align-items: center;
+}
+
+.checkpoint-icon {
+    background-color: #ff9900;
+    color: white;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 24px;
+    font-weight: bold;
 }

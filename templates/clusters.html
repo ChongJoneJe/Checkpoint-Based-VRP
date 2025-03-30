@@ -60,7 +60,8 @@
             <h2>Location Clusters</h2>
             
             <div class="preset-selector">
-                <label for="preset-select">Select Preset:</label>
+                <a href="{{ url_for('main.index') }}" class="btn btn-text">← Back to Home</a>
+                <h3>Select Preset:</h3>
                 <select id="preset-select" class="form-control">
                     <option value="all">All Locations</option>
                     <!-- Presets will be loaded here dynamically -->
@@ -84,10 +85,6 @@
             <div id="cluster-list">
                 <!-- Clusters will be listed here -->
                 <p>Loading clusters...</p>
-            </div>
-            
-            <div class="actions">
-                <a href="{{ url_for('main.index') }}" class="btn btn-secondary">Back to Home</a>
             </div>
         </div>
         
