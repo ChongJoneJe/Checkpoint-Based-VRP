@@ -2,6 +2,7 @@ from flask import request, jsonify
 from routes import vrp_bp
 from services.vrp_service import VRPService
 from services.preset_service import PresetService
+from algorithms.vrp import VehicleRoutingProblem
 
 @vrp_bp.route('/solve', methods=['POST'])
 def solve_vrp():
@@ -28,18 +29,27 @@ def solve_vrp():
         if num_vehicles < 1:
             return jsonify({"status": "error", "message": "Number of vehicles must be at least 1"})
         
-        solution = VRPService.solve_vrp(
-            preset_data['warehouse'],
-            preset_data['destinations'],
-            num_vehicles,
-            algorithm
-        )
+        # Check if checkpoint optimization was requested
+        use_checkpoints = data.get('use_checkpoints', False)
+        
+        # Choose the appropriate solver
+        if use_checkpoints:
+            solution = VRPService.solve_vrp_with_checkpoints(
+                warehouse=preset_data['warehouse'],
+                destinations=preset_data['destinations'],
+                num_vehicles=num_vehicles
+            )
+        else:
+            solution = VRPService.solve_vrp(
+                warehouse=preset_data['warehouse'],
+                destinations=preset_data['destinations'],
+                num_vehicles=num_vehicles,
+                algorithm=algorithm
+            )
         
         return jsonify({
             "status": "success",
-            "total_distance": solution['total_distance'],
-            "computation_time": solution['computation_time'],
-            "routes": solution['routes']
+            "solution": solution
         })
         
     except Exception as e:

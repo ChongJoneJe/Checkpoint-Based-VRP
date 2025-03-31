@@ -2,6 +2,7 @@ let map;
 let clusterMarkers = [];
 let warehouseMarker = null;
 let currentPreset = 'all';
+let checkpointMarkers = [];
 
 // More color options for visualizing clusters
 const clusterColors = [
@@ -37,6 +38,16 @@ const clusterColors = [
     '#338CFF'  // Azure
 ];
 
+// Helper function to get cluster color
+function getClusterColor(clusterId) {
+    // Convert clusterId to a number for indexing into colors array
+    const index = typeof clusterId === 'string' 
+        ? clusterId.split('').reduce((a,b)=>a+b.charCodeAt(0), 0) % clusterColors.length
+        : clusterId % clusterColors.length;
+    
+    return clusterColors[index];
+}
+
 // Initialize map
 function initMap() {
     // Center on Malaysia by default
@@ -60,6 +71,18 @@ function initMap() {
     document.getElementById('preset-select').addEventListener('change', function() {
         currentPreset = this.value;
         loadClusters(currentPreset);
+    });
+
+    // Add toward the end of your initMap function
+    document.getElementById('show-checkpoints').addEventListener('change', function() {
+        const visible = this.checked;
+        checkpointMarkers.forEach(marker => {
+            if (visible) {
+                marker.addTo(map);
+            } else {
+                marker.remove();
+            }
+        });
     });
 }
 
@@ -176,26 +199,18 @@ function displayClusters(clusters) {
         // No need for city prefix anymore - use the cluster name directly
         const displayName = cluster.name || `Cluster ${clusterId}`;
         
-        // Find common streets and neighborhoods safely
-        let commonStreet = findCommonValue(cluster.locations, 'street');
-        let commonNeighborhood = findCommonValue(cluster.locations, 'neighborhood');
-        
-        // Add cluster info to sidebar
+        // Simplified sidebar entry
         const clusterElement = document.createElement('div');
-        clusterElement.className = 'cluster-item';
+        clusterElement.className = 'cluster-info';
         
+        // Simplified cluster listing in sidebar
         clusterElement.innerHTML = `
-            <h4>
+            <div class="cluster-header">
                 <span class="color-sample" style="background-color: ${clusterColor}"></span>
-                ${displayName}
-                <span class="location-count">(${cluster.locations.length} locations)</span>
-            </h4>
-            <div class="cluster-details">
-                <p>Centroid: ${cluster.centroid[0].toFixed(4)}, ${cluster.centroid[1].toFixed(4)}</p>
-                ${commonStreet ? `<p><strong>Common Street:</strong> ${commonStreet}</p>` : ''}
-                ${commonNeighborhood ? `<p><strong>Neighborhood:</strong> ${commonNeighborhood}</p>` : ''}
+                <strong>${displayName}</strong> (${cluster.locations.length} locations)
             </div>
         `;
+        
         clusterListElement.appendChild(clusterElement);
         
         // Add markers for this cluster - unchanged
@@ -262,56 +277,82 @@ function findCommonValue(items, propertyName) {
     return maxValue;
 }
 
-// Add this function to display checkpoints on the map
+// Function to display checkpoints
 function displayCheckpoints(clusters) {
-    clusters.forEach((cluster, index) => {
-        if (cluster.checkpoint_lat && cluster.checkpoint_lon) {
-            // Create a special marker for checkpoints
-            const checkpoint = L.marker([cluster.checkpoint_lat, cluster.checkpoint_lon], {
-                icon: L.divIcon({
-                    className: 'checkpoint-marker',
-                    html: '<div class="checkpoint-icon">✓</div>',
-                    iconSize: [24, 24],
-                    iconAnchor: [12, 12]
-                })
+    // Clear any existing checkpoint markers
+    checkpointMarkers.forEach(marker => marker.remove());
+    checkpointMarkers = [];
+    
+    // For each cluster with a checkpoint
+    clusters.forEach(cluster => {
+        if (cluster.checkpoint) {
+            // Create marker for checkpoint
+            const checkpoint = L.marker([cluster.checkpoint.lat, cluster.checkpoint.lon], {
+                icon: createCheckpointIcon(cluster.id)
             }).addTo(map);
             
-            const clusterColor = clusterColors[index % clusterColors.length];
-            
-            // Determine the best name to display (for consistency)
-            let displayName = cluster.name || `Cluster ${cluster.id || index}`;
-            
-            // Add popup with checkpoint details
+            // Add popup with information
             checkpoint.bindPopup(`
-                <div class="checkpoint-popup">
-                    <h4>Security Checkpoint</h4>
-                    <p>For Cluster: ${displayName}</p>
-                    <p>Coordinates: ${cluster.checkpoint_lat.toFixed(5)}, ${cluster.checkpoint_lon.toFixed(5)}</p>
-                </div>
+                <strong>Security Checkpoint</strong><br>
+                <strong>Cluster:</strong> ${cluster.name}<br>
+                <strong>Road Type:</strong> ${cluster.checkpoint.from_road_type} → ${cluster.checkpoint.to_road_type}<br>
+                <strong>Coordinates:</strong> ${cluster.checkpoint.lat.toFixed(6)}, ${cluster.checkpoint.lon.toFixed(6)}<br>
+                <button class="btn-small" onclick="navigateToCheckpoint(${cluster.checkpoint.lat}, ${cluster.checkpoint.lon})">Navigate Here</button>
             `);
             
-            // Draw a line from checkpoint to warehouse if warehouse exists
-            if (warehouseMarker) {
-                const warehouselatlng = warehouseMarker.getLatLng();
-                const checkpointLine = L.polyline([
-                    [cluster.checkpoint_lat, cluster.checkpoint_lon],
-                    [warehouselatlng.lat, warehouselatlng.lng]
+            // Draw a line connecting checkpoint to cluster centroid
+            if (cluster.centroid && cluster.centroid[0] && cluster.centroid[1]) {
+                const line = L.polyline([
+                    [cluster.checkpoint.lat, cluster.checkpoint.lon],
+                    [cluster.centroid[0], cluster.centroid[1]]
                 ], {
-                    color: clusterColor,
-                    weight: 3,
+                    color: getClusterColor(cluster.id),
+                    weight: 2,
                     opacity: 0.6,
-                    dashArray: '10, 10'
+                    dashArray: '5, 5'
                 }).addTo(map);
                 
-                // Store for later removal
-                clusterMarkers.push(checkpointLine);
+                checkpointMarkers.push(line);
             }
             
-            // Store for later removal
-            clusterMarkers.push(checkpoint);
+            checkpointMarkers.push(checkpoint);
         }
     });
 }
+
+// Create custom icon for checkpoints
+function createCheckpointIcon(clusterId) {
+    return L.divIcon({
+        className: 'checkpoint-marker',
+        html: `<div class="checkpoint-icon" style="background-color: ${getClusterColor(clusterId)}"></div>`,
+        iconSize: [24, 24]
+    });
+}
+
+// Add CSS for checkpoint markers
+const style = document.createElement('style');
+style.textContent = `
+.checkpoint-icon {
+    width: 16px;
+    height: 16px;
+    border: 3px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 5px rgba(0,0,0,0.5);
+    position: relative;
+}
+
+.checkpoint-icon::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: -5px;
+    right: -5px;
+    bottom: -5px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 50%;
+}
+`;
+document.head.appendChild(style);
 
 // Display warehouse on the map if available
 function displayWarehouse(warehouse) {

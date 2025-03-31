@@ -44,41 +44,66 @@ class ClusteringService:
                         'city': warehouse_row['city'] or ''
                     }
                 
-                # Get destinations with simpler query
+                # Keep existing destination query but only fetch locations
                 destinations_query = """
-                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood
+                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood,
+                           lc.cluster_id, c.name as cluster_name, 
+                           c.centroid_lat, c.centroid_lon
                     FROM locations l
                     JOIN preset_locations pl ON l.id = pl.location_id
+                    LEFT JOIN location_clusters lc ON l.id = lc.location_id
+                    LEFT JOIN clusters c ON lc.cluster_id = c.id
                     WHERE pl.preset_id = ? AND pl.is_warehouse = 0
                 """
                 destination_rows = execute_read(destinations_query, (preset_id,))
-                
-                # Create locations list
-                locations = []
+
+                # Organize by actual clusters
+                clusters = {}
+                noise_points = []
+
                 for row in destination_rows:
-                    locations.append({
+                    location = {
                         'id': row['id'],
                         'lat': row['lat'],
                         'lon': row['lon'],
                         'street': row['street'] or '',
                         'neighborhood': row['neighborhood'] or ''
-                    })
-                
-                # Create a single cluster
-                clusters = [{
-                    'id': 'preset-destinations',
-                    'name': preset_row['name'],
-                    'centroid': [0, 0],
-                    'locations': locations
-                }]
+                    }
+                    
+                    if row['cluster_id']:
+                        cluster_id = row['cluster_id']
+                        
+                        # Initialize cluster if not seen before
+                        if cluster_id not in clusters:
+                            clusters[cluster_id] = {
+                                'id': cluster_id,
+                                'name': row['cluster_name'] or f"Cluster {cluster_id}",
+                                'centroid': [row['centroid_lat'], row['centroid_lon']] if row['centroid_lat'] else [0, 0],
+                                'locations': []
+                            }
+                        
+                        # Add location to cluster
+                        clusters[cluster_id]['locations'].append(location)
+                    else:
+                        # Add to noise points (no cluster)
+                        noise_points.append(location)
+
+                # If there are noise points, add them as a special "cluster"
+                if noise_points:
+                    clusters['noise'] = {
+                        'id': 'noise',
+                        'name': 'Unclustered Points',
+                        'centroid': [0, 0],
+                        'locations': noise_points
+                    }
                 
                 stats = {
-                    'total_locations': len(locations),
-                    'num_clusters': 1,
-                    'noise_points': 0
+                    'total_locations': sum(len(c['locations']) for c in clusters.values()),
+                    'num_clusters': len(clusters) - (1 if 'noise' in clusters else 0),
+                    'noise_points': len(noise_points)
                 }
                 
-                return clusters, warehouse, stats
+                return list(clusters.values()), warehouse, stats
                 
             except Exception as e:
                 print(f"Error in get_clusters with preset_id: {str(e)}")
@@ -160,6 +185,29 @@ class ClusteringService:
                     'centroid': [0, 0],  # Placeholder
                     'locations': noise_points
                 }
+            
+            # Add checkpoint data for each cluster
+            for cluster_id, cluster_data in clusters.items():
+                if cluster_id == 'noise':
+                    continue
+                    
+                # Get security checkpoint for this cluster
+                checkpoint_query = """
+                    SELECT id, lat, lon, from_road_type, to_road_type 
+                    FROM security_checkpoints
+                    WHERE cluster_id = ?
+                    LIMIT 1
+                """
+                checkpoint = execute_read(checkpoint_query, (cluster_id,), one=True)
+                
+                if checkpoint:
+                    cluster_data['checkpoint'] = {
+                        'id': checkpoint['id'],
+                        'lat': checkpoint['lat'],
+                        'lon': checkpoint['lon'],
+                        'from_road_type': checkpoint['from_road_type'] or 'unknown',
+                        'to_road_type': checkpoint['to_road_type'] or 'unknown'
+                    }
             
             # Prepare stats
             total_locations = sum(len(c['locations']) for c in clusters.values())

@@ -86,4 +86,15 @@ CREATE TABLE IF NOT EXISTS location_intersections (
     FOREIGN KEY (location_id) REFERENCES locations(id),
     FOREIGN KEY (intersection_id) REFERENCES intersections(id)
 );
+
+CREATE TABLE IF NOT EXISTS security_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id INTEGER,
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    from_road_type TEXT,
+    to_road_type TEXT,
+    confidence REAL DEFAULT 1.0,
+    FOREIGN KEY (cluster_id) REFERENCES clusters(id)
+);
 """

@@ -708,6 +708,19 @@ class GeoDBSCAN:
             if cluster_id:
                 ClusterRepository.add_location_to_cluster(location_id, cluster_id)
             
+            # Modify this part in add_location_with_smart_clustering
+            if is_new_cluster:
+                # After creating the cluster, identify and save its checkpoint
+                transitions = self.identify_road_transitions(lat, lon, warehouse_lat, warehouse_lon)
+                security_checkpoints = [t for t in transitions if t.get('is_potential_checkpoint')]
+                
+                if security_checkpoints:
+                    # Sort by position (earlier in route = closer to origin)
+                    security_checkpoints.sort(key=lambda x: x['position'])
+                    checkpoint = security_checkpoints[0]
+                    self.save_cluster_checkpoint(cluster_id, checkpoint)
+                    print(f"Saved security checkpoint for cluster {cluster_id}")
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -869,3 +882,62 @@ class GeoDBSCAN:
             return 0
         
         return len(common) / len(union)
+
+    def save_cluster_checkpoint(self, cluster_id, checkpoint_data):
+        """Save a security checkpoint for a cluster"""
+        try:
+            # Check if checkpoint already exists
+            existing = execute_read(
+                "SELECT id FROM cluster_checkpoints WHERE cluster_id = ?",
+                (cluster_id,),
+                one=True
+            )
+            
+            if existing:
+                # Update existing checkpoint
+                execute_write(
+                    """UPDATE cluster_checkpoints 
+                       SET lat = ?, lon = ?, road_from = ?, road_to = ?
+                       WHERE cluster_id = ?""",
+                    (
+                        checkpoint_data['lat'],
+                        checkpoint_data['lon'],
+                        checkpoint_data.get('from_type', ''),
+                        checkpoint_data.get('to_type', ''),
+                        cluster_id
+                    )
+                )
+                return existing['id']
+            else:
+                # Insert new checkpoint
+                checkpoint_id = execute_write(
+                    """INSERT INTO cluster_checkpoints
+                       (cluster_id, lat, lon, road_from, road_to)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        cluster_id,
+                        checkpoint_data['lat'],
+                        checkpoint_data['lon'],
+                        checkpoint_data.get('from_type', ''),
+                        checkpoint_data.get('to_type', '')
+                    )
+                )
+                return checkpoint_id
+        except Exception as e:
+            print(f"Error saving cluster checkpoint: {str(e)}")
+            return None
+
+    def get_cluster_checkpoint(self, cluster_id):
+        """Get the security checkpoint for a cluster"""
+        try:
+            checkpoint = execute_read(
+                """SELECT id, lat, lon, road_from, road_to
+                   FROM cluster_checkpoints 
+                   WHERE cluster_id = ?""",
+                (cluster_id,),
+                one=True
+            )
+            return checkpoint
+        except Exception as e:
+            print(f"Error retrieving cluster checkpoint: {str(e)}")
+            return None

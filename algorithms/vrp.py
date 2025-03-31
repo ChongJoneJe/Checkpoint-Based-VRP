@@ -99,7 +99,7 @@ class VehicleRoutingProblem:
         Solve the VRP problem using the specified algorithm
         
         Args:
-            algorithm (str): The algorithm to use ("nearest_neighbor" or "two_opt")
+            algorithm (str): The algorithm to use ("nearest_neighbor", "two_opt", or "checkpoints")
             
         Returns:
             dict: Solution containing routes and total distance
@@ -109,6 +109,8 @@ class VehicleRoutingProblem:
         elif algorithm == "two_opt":
             nn_solution = self._solve_nearest_neighbor()
             return self._improve_with_two_opt(nn_solution)
+        elif algorithm == "checkpoints":
+            return self.solve_with_checkpoints()
         else:
             raise ValueError(f"Unknown algorithm: {algorithm}")
     
@@ -237,3 +239,53 @@ class VehicleRoutingProblem:
         for i in range(len(route) - 1):
             distance += self.distance_matrix[route[i]][route[i+1]]
         return distance
+    
+    def solve_with_checkpoints(self):
+        """
+        Optimized VRP solver using security checkpoints to minimize route calculations
+        """
+        # Step 1: Group destinations by cluster
+        clusters = self._get_destinations_by_cluster()
+        
+        # Step 2: Get checkpoints for each cluster
+        checkpoints = self._get_cluster_checkpoints(clusters)
+        
+        # Step 3: Calculate routes from warehouse to each checkpoint (once per cluster)
+        warehouse_to_checkpoint_routes = {}
+        for cluster_id, checkpoint in checkpoints.items():
+            # This is the expensive API call we want to minimize
+            route = self._calculate_route(
+                self.warehouse[0], self.warehouse[1], 
+                checkpoint['lat'], checkpoint['lon']
+            )
+            warehouse_to_checkpoint_routes[cluster_id] = route
+        
+        # Step 4: Calculate routes within each cluster (from checkpoint to destinations)
+        checkpoint_to_destination_routes = {}
+        for cluster_id, destinations in clusters.items():
+            checkpoint = checkpoints.get(cluster_id)
+            if not checkpoint:
+                continue
+                
+            # Calculate routes from checkpoint to each destination in cluster
+            routes = []
+            for dest in destinations:
+                route = self._calculate_route(
+                    checkpoint['lat'], checkpoint['lon'],
+                    dest[0], dest[1]
+                )
+                routes.append({
+                    'destination': dest,
+                    'route': route
+                })
+            checkpoint_to_destination_routes[cluster_id] = routes
+        
+        # Step 5: Build optimized solution combining these routes
+        solution = self._build_checkpoint_based_solution(
+            clusters, 
+            checkpoints,
+            warehouse_to_checkpoint_routes,
+            checkpoint_to_destination_routes
+        )
+        
+        return solution

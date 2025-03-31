@@ -129,47 +129,40 @@ function updateMapWithPreset() {
  * Solve the VRP with the current preset
  */
 function solveVRP() {
-    if (!currentPreset) {
-        alert('Please load a preset first');
-        return;
-    }
-    
+    // Get values from form
+    const numVehicles = parseInt(document.getElementById('num-vehicles').value) || 1;
     const algorithm = document.getElementById('algorithm').value;
-    const vehicleCount = document.getElementById('vehicle-count').value;
+    const useCheckpoints = document.getElementById('use-checkpoints').checked;
     
-    // Display loading state
-    document.getElementById('solve-btn').disabled = true;
-    document.getElementById('solve-btn').textContent = 'Solving...';
+    // Build request data
+    const data = {
+        preset_id: currentPreset.id,
+        num_vehicles: numVehicles,
+        algorithm: algorithm,
+        use_checkpoints: useCheckpoints  // Send this parameter to backend
+    };
     
-    // Send solve request to backend
-    fetch('/solve_vrp', {
+    // Show loading state
+    document.getElementById('results-container').innerHTML = '<p>Solving VRP...</p>';
+    
+    // Send to backend
+    fetch('/vrp/solve', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            preset_id: currentPreset.id,
-            algorithm: algorithm,
-            vehicle_count: parseInt(vehicleCount)
-        })
+        body: JSON.stringify(data)
     })
     .then(response => response.json())
     .then(data => {
-        document.getElementById('solve-btn').disabled = false;
-        document.getElementById('solve-btn').textContent = 'Solve VRP';
-        
         if (data.status === 'success') {
             displayResults(data);
-            drawRoutes(data.routes);
         } else {
-            alert('Error solving VRP: ' + data.message);
+            // Show error
         }
     })
     .catch(error => {
-        console.error('Error:', error);
-        alert('Failed to solve VRP');
-        document.getElementById('solve-btn').disabled = false;
-        document.getElementById('solve-btn').textContent = 'Solve VRP';
+        // Handle error
     });
 }
 

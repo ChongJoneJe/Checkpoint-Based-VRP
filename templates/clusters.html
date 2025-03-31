@@ -86,6 +86,13 @@
                 <!-- Clusters will be listed here -->
                 <p>Loading clusters...</p>
             </div>
+
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="show-checkpoints" checked>
+                <label class="form-check-label" for="show-checkpoints">
+                    Show Security Checkpoints
+                </label>
+            </div>
         </div>
         
         <div id="map"></div>
@@ -93,5 +100,17 @@
     
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="{{ url_for('static', filename='js/clusters.js') }}"></script>
+    <script>
+        document.getElementById('show-checkpoints').addEventListener('change', function() {
+            const visible = this.checked;
+            checkpointMarkers.forEach(marker => {
+                if (visible) {
+                    marker.addTo(map);
+                } else {
+                    marker.remove();
+                }
+            });
+        });
+    </script>
 </body>
 </html>
