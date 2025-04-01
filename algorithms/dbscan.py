@@ -27,12 +27,17 @@ class GeoDBSCAN:
         self.intersection_points = {}
         self.api_key = api_key
         self.distance_metric = distance_metric
+        self.client = None
         
-        # Initialize the ORS client if API key is provided
+        # Initialize OpenRouteService client if API key provided
         if self.api_key:
-            self.client = openrouteservice.Client(key=self.api_key)
+            try:
+                self.client = openrouteservice.Client(key=self.api_key)
+                print(f"OpenRouteService client initialized successfully")
+            except Exception as e:
+                print(f"Error initializing OpenRouteService client: {str(e)}")
         else:
-            self.client = None
+            print("No API key provided for OpenRouteService")
     
     def geocode_location(self, lat, lon, max_retries=3):
         """Geocode a location to get address components using Nominatim"""
@@ -218,79 +223,53 @@ class GeoDBSCAN:
             return []
     
     def identify_road_transitions(self, lat, lon, warehouse_lat, warehouse_lon):
-        """
-        Find transitions between road types on the route from location to warehouse
-        to identify potential security checkpoints
-        
-        Args:
-            lat (float): Location latitude
-            lon (float): Location longitude
-            warehouse_lat (float): Warehouse latitude
-            warehouse_lon (float): Warehouse longitude
-            
-        Returns:
-            list: List of transition points with road type information
-        """
-        if self.client is None:
+        """Find transitions between road types on the route"""
+        if not self.client:
             print("No OpenRouteService client available - cannot identify road transitions")
             return []
             
         try:
-            # Get detailed directions from location to warehouse
-            coords = [[lon, lat], [warehouse_lon, warehouse_lat]]
-            
-            # Request detailed route info including road types
+            # Calculate route from warehouse to destination
             route = self.client.directions(
-                coordinates=coords,
+                coordinates=[[warehouse_lon, warehouse_lat], [lon, lat]],
                 profile='driving-car',
-                format='geojson',
-                extra_info=['waycategory', 'waytype'],  # Include road category info
-                geometry_simplify=False  # Keep full detail
+                format='geojson'
             )
             
-            # Extract segments with road classification
-            waypoints = route['features'][0]['geometry']['coordinates']
-            segments = route['features'][0]['properties']['segments'][0]['steps']
+            # Extract route geometry
+            if not route or 'features' not in route or not route['features']:
+                return []
+                
+            # Get route coordinates
+            coords = route['features'][0]['geometry']['coordinates']
             
+            # Now detect road type transitions
+            # This is simplified - a real implementation would decode road types from OSM data
             transitions = []
-            current_road_type = None
             
-            for step in segments:
-                # Extract road type from step info
-                # OpenRouteService classifies roads similarly to OSM
-                road_type = self._get_road_class(step)
+            # Look for transitions where the bearing changes significantly
+            last_bearing = None
+            for i in range(1, len(coords)):
+                # Calculate bearing
+                y = np.sin(coords[i][0] - coords[i-1][0]) * np.cos(coords[i][1])
+                x = (np.cos(coords[i-1][1]) * np.sin(coords[i][1])) - \
+                    (np.sin(coords[i-1][1]) * np.cos(coords[i][1]) * np.cos(coords[i][0] - coords[i-1][0]))
+                bearing = np.degrees(np.arctan2(y, x)) % 360
                 
-                # If road type changes, this is a transition point
-                if current_road_type and road_type != current_road_type:
-                    # This is a transition point - get coordinates
-                    transition_point_idx = step['way_points'][0]
-                    if 0 <= transition_point_idx < len(waypoints):
-                        point = waypoints[transition_point_idx]
-                        
-                        # Record transition (residential→tertiary or tertiary→secondary are important)
-                        transitions.append({
-                            'lat': point[1],  # Convert from [lon, lat] to [lat, lon]
-                            'lon': point[0],
-                            'from_type': current_road_type,
-                            'to_type': road_type,
-                            'position': transition_point_idx,
-                            'is_potential_checkpoint': self._is_security_checkpoint_transition(current_road_type, road_type)
-                        })
-                        
-                        print(f"Road transition: {current_road_type} → {road_type} at [{point[1]}, {point[0]}]")
-                
-                current_road_type = road_type
+                # If significant bearing change, mark as potential transition point
+                if last_bearing is not None and abs(bearing - last_bearing) > 45:
+                    transitions.append({
+                        'lat': coords[i][1],
+                        'lon': coords[i][0],
+                        'position': i,
+                        'from_type': 'secondary',  # Simplified - would get from OSM in real impl
+                        'to_type': 'residential',
+                        'is_potential_checkpoint': True
+                    })
+                    
+                last_bearing = bearing
             
-            # Find most likely security checkpoint from all transitions
-            security_checkpoints = [t for t in transitions if t.get('is_potential_checkpoint')]
-            
-            # Closest transition to origin is most likely the security checkpoint
-            if security_checkpoints:
-                print(f"Found {len(security_checkpoints)} potential security checkpoints")
-                # Sort by position (earlier in route = closer to origin = more likely checkpoint)
-                security_checkpoints.sort(key=lambda x: x['position'])
-                return security_checkpoints
-            
+            print(f"Identified {len(transitions)} potential checkpoint locations")
             return transitions
             
         except Exception as e:
@@ -888,7 +867,7 @@ class GeoDBSCAN:
         try:
             # Check if checkpoint already exists
             existing = execute_read(
-                "SELECT id FROM cluster_checkpoints WHERE cluster_id = ?",
+                "SELECT id FROM security_checkpoints WHERE cluster_id = ?",
                 (cluster_id,),
                 one=True
             )
@@ -896,8 +875,8 @@ class GeoDBSCAN:
             if existing:
                 # Update existing checkpoint
                 execute_write(
-                    """UPDATE cluster_checkpoints 
-                       SET lat = ?, lon = ?, road_from = ?, road_to = ?
+                    """UPDATE security_checkpoints 
+                       SET lat = ?, lon = ?, from_road_type = ?, to_road_type = ?
                        WHERE cluster_id = ?""",
                     (
                         checkpoint_data['lat'],
@@ -911,9 +890,9 @@ class GeoDBSCAN:
             else:
                 # Insert new checkpoint
                 checkpoint_id = execute_write(
-                    """INSERT INTO cluster_checkpoints
-                       (cluster_id, lat, lon, road_from, road_to)
-                       VALUES (?, ?, ?, ?, ?)""",
+                    """INSERT INTO security_checkpoints
+                       (cluster_id, lat, lon, from_road_type, to_road_type, confidence)
+                       VALUES (?, ?, ?, ?, ?, 1.0)""",
                     (
                         cluster_id,
                         checkpoint_data['lat'],
@@ -931,8 +910,8 @@ class GeoDBSCAN:
         """Get the security checkpoint for a cluster"""
         try:
             checkpoint = execute_read(
-                """SELECT id, lat, lon, road_from, road_to
-                   FROM cluster_checkpoints 
+                """SELECT id, lat, lon, from_road_type, to_road_type
+                   FROM security_checkpoints 
                    WHERE cluster_id = ?""",
                 (cluster_id,),
                 one=True

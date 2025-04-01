@@ -324,7 +324,9 @@ function displayCheckpoints(clusters) {
 function createCheckpointIcon(clusterId) {
     return L.divIcon({
         className: 'checkpoint-marker',
-        html: `<div class="checkpoint-icon" style="background-color: ${getClusterColor(clusterId)}"></div>`,
+        html: `<div class="checkpoint-icon">
+                 <i class="fas fa-shield-alt" style="color: ${getClusterColor(clusterId)}"></i>
+               </div>`,
         iconSize: [24, 24]
     });
 }

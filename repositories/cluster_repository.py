@@ -1,4 +1,5 @@
 from utils.database import execute_read, execute_write, execute_many
+import json
 
 class ClusterRepository:
     """Handles all database operations related to clusters"""
@@ -78,3 +79,34 @@ class ClusterRepository:
                WHERE pl.preset_id = ?""",
             (preset_id,)
         )
+    
+    @staticmethod
+    def get_cluster_checkpoint(cluster_id):
+        """Get the security checkpoint for a cluster"""
+        return execute_read(
+            """SELECT id, cluster_id, lat, lon, from_road_type, to_road_type
+               FROM security_checkpoints
+               WHERE cluster_id = ?
+               LIMIT 1""",
+            (cluster_id,),
+            one=True
+        )
+
+    @staticmethod
+    def save_route_cache(cache_key, route_data):
+        """Save a route to the cache"""
+        return execute_write(
+            """INSERT OR REPLACE INTO route_cache (cache_key, route_data, created_at)
+               VALUES (?, ?, datetime('now'))""",
+            (cache_key, json.dumps(route_data))
+        )
+
+    @staticmethod
+    def get_cached_route(cache_key):
+        """Get a cached route by key"""
+        result = execute_read(
+            """SELECT route_data FROM route_cache WHERE cache_key = ?""",
+            (cache_key,),
+            one=True
+        )
+        return json.loads(result['route_data']) if result else None

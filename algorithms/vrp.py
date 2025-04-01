@@ -26,6 +26,7 @@ class VehicleRoutingProblem:
         self.destinations = destination_coords
         self.num_vehicles = num_vehicles
         self.api_key = api_key or os.environ.get('ORS_API_KEY')
+        self.client = None
         
         # Create distance matrix
         self.distance_matrix = self._calculate_distance_matrix()
@@ -244,48 +245,143 @@ class VehicleRoutingProblem:
         """
         Optimized VRP solver using security checkpoints to minimize route calculations
         """
-        # Step 1: Group destinations by cluster
-        clusters = self._get_destinations_by_cluster()
+        # Get clusters and their checkpoints from database
+        clusters_with_checkpoints = self._get_clusters_with_checkpoints()
         
-        # Step 2: Get checkpoints for each cluster
-        checkpoints = self._get_cluster_checkpoints(clusters)
+        # Group destinations by cluster
+        destinations_by_cluster = self._group_destinations_by_cluster()
         
-        # Step 3: Calculate routes from warehouse to each checkpoint (once per cluster)
-        warehouse_to_checkpoint_routes = {}
-        for cluster_id, checkpoint in checkpoints.items():
-            # This is the expensive API call we want to minimize
-            route = self._calculate_route(
-                self.warehouse[0], self.warehouse[1], 
-                checkpoint['lat'], checkpoint['lon']
-            )
-            warehouse_to_checkpoint_routes[cluster_id] = route
+        # Calculate only necessary routes (warehouse→checkpoint, checkpoint→destinations)
+        optimized_routes = {}
         
-        # Step 4: Calculate routes within each cluster (from checkpoint to destinations)
-        checkpoint_to_destination_routes = {}
-        for cluster_id, destinations in clusters.items():
-            checkpoint = checkpoints.get(cluster_id)
-            if not checkpoint:
+        # 1. Calculate warehouse→checkpoint routes (once per cluster)
+        for cluster_id, checkpoint in clusters_with_checkpoints.items():
+            # Cache key for route
+            cache_key = f"wh_to_cp_{cluster_id}"
+            
+            # Get from cache or calculate
+            if cache_key in self._route_cache:
+                route = self._route_cache[cache_key]
+            else:
+                route = self._calculate_route(
+                    self.warehouse[0], self.warehouse[1],
+                    checkpoint['lat'], checkpoint['lon']
+                )
+                self._route_cache[cache_key] = route
+            
+            # Store route
+            optimized_routes[cluster_id] = {
+                'warehouse_to_checkpoint': route,
+                'checkpoint': checkpoint,
+                'destinations': []
+            }
+        
+        # 2. Calculate checkpoint→destination routes
+        for cluster_id, destinations in destinations_by_cluster.items():
+            if cluster_id not in clusters_with_checkpoints:
                 continue
                 
-            # Calculate routes from checkpoint to each destination in cluster
-            routes = []
-            for dest in destinations:
-                route = self._calculate_route(
-                    checkpoint['lat'], checkpoint['lon'],
-                    dest[0], dest[1]
-                )
-                routes.append({
-                    'destination': dest,
+            checkpoint = clusters_with_checkpoints[cluster_id]
+            
+            for i, dest in enumerate(destinations):
+                # Cache key for route
+                cache_key = f"cp_{cluster_id}_to_dest_{i}"
+                
+                # Get from cache or calculate
+                if cache_key in self._route_cache:
+                    route = self._route_cache[cache_key]
+                else:
+                    route = self._calculate_route(
+                        checkpoint['lat'], checkpoint['lon'],
+                        dest[0], dest[1]
+                    )
+                    self._route_cache[cache_key] = route
+                
+                # Add to optimized routes
+                optimized_routes[cluster_id]['destinations'].append({
+                    'index': i,
+                    'coords': dest,
                     'route': route
                 })
-            checkpoint_to_destination_routes[cluster_id] = routes
         
-        # Step 5: Build optimized solution combining these routes
-        solution = self._build_checkpoint_based_solution(
-            clusters, 
-            checkpoints,
-            warehouse_to_checkpoint_routes,
-            checkpoint_to_destination_routes
-        )
+        # 3. Solve the VRP within each cluster
+        solution = self._solve_with_checkpoints(optimized_routes)
         
         return solution
+    
+    def calculate_routes_through_checkpoints(self, warehouse, checkpoints, destinations):
+        """
+        Calculate optimized routes through security checkpoints
+        
+        Args:
+            warehouse: [lat, lon] of warehouse
+            checkpoints: Dict of {cluster_id: checkpoint_data}
+            destinations: Dict of {cluster_id: list of [lat, lon] destinations}
+            
+        Returns:
+            dict: Route information optimized through checkpoints
+        """
+        if not self.client:
+            self.client = openrouteservice.Client(key=self.api_key)
+        
+        route_data = {}
+        
+        # Initialize route cache for efficiency
+        if not hasattr(self, '_route_cache'):
+            self._route_cache = {}
+        
+        # For each cluster, calculate warehouse→checkpoint→destinations→checkpoint→warehouse
+        for cluster_id, checkpoint in checkpoints.items():
+            if cluster_id not in destinations:
+                continue
+                
+            # Step 1: Calculate warehouse to checkpoint (just once per cluster)
+            wh_to_cp_key = f"{warehouse[0]:.5f},{warehouse[1]:.5f}|{checkpoint['lat']:.5f},{checkpoint['lon']:.5f}"
+            
+            if wh_to_cp_key in self._route_cache:
+                wh_to_cp_route = self._route_cache[wh_to_cp_key]
+            else:
+                try:
+                    wh_to_cp_route = self.client.directions(
+                        coordinates=[[warehouse[1], warehouse[0]], [checkpoint['lon'], checkpoint['lat']]],
+                        profile='driving-car',
+                        format='geojson'
+                    )
+                    self._route_cache[wh_to_cp_key] = wh_to_cp_route
+                except Exception as e:
+                    print(f"Error calculating route warehouse→checkpoint: {str(e)}")
+                    wh_to_cp_route = None
+            
+            # Step 2: Calculate routes from checkpoint to each destination
+            cp_to_dests = []
+            
+            for dest in destinations[cluster_id]:
+                cp_to_dest_key = f"{checkpoint['lat']:.5f},{checkpoint['lon']:.5f}|{dest[0]:.5f},{dest[1]:.5f}"
+                
+                if cp_to_dest_key in self._route_cache:
+                    cp_to_dest_route = self._route_cache[cp_to_dest_key]
+                else:
+                    try:
+                        cp_to_dest_route = self.client.directions(
+                            coordinates=[[checkpoint['lon'], checkpoint['lat']], [dest[1], dest[0]]],
+                            profile='driving-car',
+                            format='geojson'
+                        )
+                        self._route_cache[cp_to_dest_key] = cp_to_dest_route
+                    except Exception as e:
+                        print(f"Error calculating route checkpoint→destination: {str(e)}")
+                        cp_to_dest_route = None
+                
+                cp_to_dests.append({
+                    'destination': dest,
+                    'route': cp_to_dest_route
+                })
+            
+            # Store all routes for this cluster
+            route_data[cluster_id] = {
+                'checkpoint': checkpoint,
+                'warehouse_to_checkpoint': wh_to_cp_route,
+                'checkpoint_to_destinations': cp_to_dests
+            }
+        
+        return route_data

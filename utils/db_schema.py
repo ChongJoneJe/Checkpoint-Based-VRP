@@ -97,4 +97,10 @@ CREATE TABLE IF NOT EXISTS security_checkpoints (
     confidence REAL DEFAULT 1.0,
     FOREIGN KEY (cluster_id) REFERENCES clusters(id)
 );
+
+CREATE TABLE IF NOT EXISTS route_cache (
+    cache_key TEXT PRIMARY KEY,
+    route_data TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """

@@ -97,6 +97,29 @@ class ClusteringService:
                         'locations': noise_points
                     }
                 
+                # Add checkpoint data for each cluster
+                for cluster_id, cluster_data in clusters.items():
+                    if cluster_id == 'noise':
+                        continue
+                        
+                    # Get security checkpoint for this cluster
+                    checkpoint_query = """
+                        SELECT id, lat, lon, from_road_type, to_road_type 
+                        FROM security_checkpoints
+                        WHERE cluster_id = ?
+                        LIMIT 1
+                    """
+                    checkpoint = execute_read(checkpoint_query, (cluster_id,), one=True)
+                    
+                    if checkpoint:
+                        cluster_data['checkpoint'] = {
+                            'id': checkpoint['id'],
+                            'lat': checkpoint['lat'],
+                            'lon': checkpoint['lon'],
+                            'from_road_type': checkpoint['from_road_type'] or 'unknown',
+                            'to_road_type': checkpoint['to_road_type'] or 'unknown'
+                        }
+                
                 stats = {
                     'total_locations': sum(len(c['locations']) for c in clusters.values()),
                     'num_clusters': len(clusters) - (1 if 'noise' in clusters else 0),

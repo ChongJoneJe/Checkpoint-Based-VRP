@@ -1,4 +1,5 @@
 import time
+import os
 from algorithms.vrp import VehicleRoutingProblem
 
 class VRPService:
@@ -31,11 +32,12 @@ class VRPService:
         """Solve a vehicle routing problem using checkpoint optimization"""
         start_time = time.time()
         
-        # Initialize VRP solver
+        # Initialize VRP solver with checkpoint optimization
         vrp_solver = VehicleRoutingProblem(
             warehouse_coords=warehouse,
             destination_coords=destinations,
-            num_vehicles=num_vehicles
+            num_vehicles=num_vehicles,
+            api_key=os.environ.get('ORS_API_KEY')  # Make sure this is set
         )
         
         # Solve using checkpoint optimization

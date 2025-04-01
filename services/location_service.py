@@ -1,7 +1,9 @@
 import uuid
+import os
 from datetime import datetime
 from utils.database import execute_read, execute_write
 from algorithms.dbscan import GeoDBSCAN
+from flask import current_app
 import logging
 
 # Set up logging
@@ -47,9 +49,22 @@ class LocationService:
     @staticmethod
     def save_locations(name, warehouse, destinations):
         """Save the selected warehouse and delivery locations as a preset with clustering"""
-        geocoder = GeoDBSCAN()
-        
         try:
+            # Get API key from app config or environment
+            api_key = os.environ.get('ORS_API_KEY')
+            if not api_key:
+                from flask import current_app
+                api_key = current_app.config.get('ORS_API_KEY')
+
+            # Initialize GeoDBSCAN with API key
+            geocoder = GeoDBSCAN(api_key=api_key)
+
+            # Print confirmation
+            if api_key:
+                print(f"Using OpenRouteService API key: {api_key[:5]}...{api_key[-5:]}")
+            else:
+                print("WARNING: No OpenRouteService API key available - checkpoint detection disabled")
+            
             # Generate preset ID
             preset_id = str(uuid.uuid4())
             
