@@ -276,6 +276,183 @@ class GeoDBSCAN:
             print(f"Error identifying road transitions: {str(e)}")
             return []
 
+    def identify_access_points_from_segments(self, src_lat, src_lon, warehouse_lat, warehouse_lon):
+        """
+        Alternative method that uses OpenRouteService segments to identify road transitions
+        """
+        if self.client is None:
+            print("No OpenRouteService client available")
+            return []
+            
+        try:
+            # Request directions with more detail
+            route = self.client.directions(
+                coordinates=[[src_lon, src_lat], [warehouse_lon, warehouse_lat]],
+                profile='driving-car',
+                format='json',  # Use JSON format which includes segments
+                extra_info=['waytype', 'steepness']
+            )
+            
+            # Extract segments
+            segments = route.get('routes', [{}])[0].get('segments', [])
+            print(f"DEBUG: Route has {len(segments)} segments")
+            
+            access_points = []
+            prev_type = None
+            
+            # Process each segment
+            for i, segment in enumerate(segments):
+                # Get steps within segment
+                steps = segment.get('steps', [])
+                for j, step in enumerate(steps):
+                    road_type = step.get('type', '')
+                    way_type = step.get('way_type', 0)  # OpenRouteService way type
+                    
+                    # Map way_type numbers to road classifications (from ORS documentation)
+                    way_types = {
+                        0: 'unknown',
+                        1: 'motorway', 
+                        2: 'trunk',
+                        3: 'primary',
+                        4: 'secondary',
+                        5: 'tertiary',
+                        6: 'residential',
+                        7: 'service',
+                        8: 'path'
+                    }
+                    
+                    current_type = way_types.get(way_type, 'unknown')
+                    
+                    # Check for transitions from residential to higher-class roads
+                    if prev_type and prev_type != current_type:
+                        if (prev_type == 'residential' and current_type in ['tertiary', 'secondary', 'primary']) or \
+                           (prev_type == 'tertiary' and current_type in ['secondary', 'primary']):
+                            
+                            # Extract the location of this transition (beginning of current step)
+                            location = step.get('location', [])
+                            if location:
+                                access_points.append({
+                                    'lon': location[0],
+                                    'lat': location[1],
+                                    'position': i*100 + j,  # Synthetic position 
+                                    'from_type': prev_type,
+                                    'to_type': current_type
+                                })
+                                print(f"DEBUG: Found transition from {prev_type} to {current_type}")
+                    
+                    prev_type = current_type
+            
+            print(f"DEBUG: Found {len(access_points)} access points using segments approach")
+            return access_points
+            
+        except Exception as e:
+            print(f"ERROR: Failed to identify access points from segments: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def identify_access_points_by_bearing(self, src_lat, src_lon, warehouse_lat, warehouse_lon):
+        """
+        Identify potential access points by detecting significant bearing changes
+        """
+        if self.client is None:
+            return []
+            
+        try:
+            # Get route
+            route = self.client.directions(
+                coordinates=[[src_lon, src_lat], [warehouse_lon, warehouse_lat]],
+                profile='driving-car',
+                format='geojson'
+            )
+            
+            # Extract coordinates
+            coords = route['features'][0]['geometry']['coordinates']
+            
+            # Look for significant bearing changes
+            access_points = []
+            last_bearing = None
+            MIN_ANGLE_CHANGE = 60  # Minimum angle change to consider a significant turn
+            
+            for i in range(1, len(coords)):
+                # Calculate bearing between consecutive points
+                lon1, lat1 = coords[i-1]
+                lon2, lat2 = coords[i]
+                
+                y = np.sin(lon2 - lon1) * np.cos(lat2)
+                x = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(lon2 - lon1)
+                bearing = np.degrees(np.arctan2(y, x)) % 360
+                
+                if last_bearing is not None:
+                    # Calculate absolute bearing difference
+                    diff = min(abs(bearing - last_bearing), 360 - abs(bearing - last_bearing))
+                    
+                    if diff > MIN_ANGLE_CHANGE:
+                        # This is a significant turn, could be a security checkpoint
+                        access_points.append({
+                            'lat': lat1,
+                            'lon': lon1,
+                            'position': i-1,
+                            'from_type': 'unknown',
+                            'to_type': 'unknown',
+                            'bearing_change': diff
+                        })
+                
+                last_bearing = bearing
+            
+            # Sort by bearing change, most significant first
+            access_points.sort(key=lambda x: x.get('bearing_change', 0), reverse=True)
+            
+            # Return the most significant turn if any found
+            if access_points:
+                # Just return the strongest candidate
+                return [access_points[0]]
+            
+            return []
+        
+        except Exception as e:
+            print(f"ERROR in bearing-based detection: {str(e)}")
+            return []
+
+    def identify_access_points_with_fallbacks(self, src_lat, src_lon, warehouse_lat, warehouse_lon):
+        """
+        Try multiple methods to identify access points with fallbacks
+        """
+        print(f"DEBUG: Trying to identify access points using multiple methods")
+        
+        # First try the tag-based approach
+        access_points = self.identify_access_points(src_lat, src_lon, warehouse_lat, warehouse_lon)
+        if access_points:
+            print(f"DEBUG: Found {len(access_points)} access points using tag-based approach")
+            return access_points
+        
+        # Then try segment-based approach
+        print(f"DEBUG: Tag-based approach failed, trying segment-based approach")
+        access_points = self.identify_access_points_from_segments(src_lat, src_lon, warehouse_lat, warehouse_lon)
+        if access_points:
+            print(f"DEBUG: Found {len(access_points)} access points using segment-based approach")
+            return access_points
+        
+        # Finally, try bearing-based approach
+        print(f"DEBUG: Segment-based approach failed, trying bearing-based approach")
+        access_points = self.identify_access_points_by_bearing(src_lat, src_lon, warehouse_lat, warehouse_lon)
+        if access_points:
+            print(f"DEBUG: Found {len(access_points)} access points using bearing-based approach")
+            return access_points
+        
+        # If all approaches fail, use a fallback coordinate at 1/3 the distance from destination to warehouse
+        print(f"DEBUG: All approaches failed, using distance-based fallback")
+        fallback = {
+            'lat': src_lat + (warehouse_lat - src_lat) / 3,
+            'lon': src_lon + (warehouse_lon - src_lon) / 3,
+            'position': 0,
+            'from_type': 'unknown',
+            'to_type': 'unknown',
+            'is_fallback': True
+        }
+        
+        return [fallback]
+
     def _get_road_class(self, step):
         """Extract the road classification from route step"""
         # The actual field might vary depending on the ORS API version
@@ -559,152 +736,458 @@ class GeoDBSCAN:
         
         return self
 
+    def get_road_tags(self, lat, lon):
+        """
+        Use Nominatim to get road type information from a coordinate with multiple fallbacks.
+        Tries different zoom levels and handles missing data gracefully.
+        """
+        try:
+            print(f"DEBUG: Fetching road tags for ({lat}, {lon})")
+            
+            # Try with different zoom levels - zoom 18 for detail, 17 for broader view, 16 for even broader
+            for zoom in [18, 17, 16]:
+                response = requests.get(
+                    f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom={zoom}&addressdetails=1&extratags=1",
+                    headers={"User-Agent": "python-clustering-app"},
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Create a combined tags dictionary
+                    result = {}
+                    
+                    # Track what data we found in debug log
+                    found_data = []
+                    
+                    # 1. Check OSM class and type fields (primary source)
+                    osm_class = data.get("class")
+                    osm_type = data.get("type")
+                    if osm_class and osm_type:
+                        result["class"] = osm_class
+                        result["type"] = osm_type
+                        found_data.append(f"osm_class={osm_class}, osm_type={osm_type}")
+                        
+                        # If it's a "highway" type, this is what we're looking for
+                        if osm_class == "highway":
+                            result["highway"] = osm_type
+                            found_data.append(f"highway={osm_type}")
+                    
+                    # 2. Check extratags (secondary source, less reliable)
+                    extratags = data.get("extratags", {})
+                    if extratags:
+                        # Merge extratags into our result
+                        result.update(extratags)
+                        found_data.append(f"extratags={extratags}")
+                    
+                    # 3. Try to extract from address components (tertiary source)
+                    address = data.get("address", {})
+                    if address:
+                        road = address.get("road")
+                        if road:
+                            result["road_name"] = road
+                            found_data.append(f"road_name={road}")
+                        
+                        # See if the address contains hints about road type
+                        for key in ["road_type", "highway", "street_type"]:
+                            if key in address:
+                                result["inferred_type"] = address[key]
+                                found_data.append(f"inferred_type={address[key]}")
+                    
+                    # 4. If we have a name but not a type, try to infer type from name
+                    if "name" in data and "highway" not in result:
+                        name = data["name"].lower()
+                        road_indicators = {
+                            "highway": "primary",
+                            "expressway": "primary", 
+                            "freeway": "primary",
+                            "motorway": "primary",
+                            "jalan raya": "primary",
+                            "jalan utama": "primary",
+                            "main road": "primary",
+                            "jalan": "secondary",
+                            "lebuh": "secondary",
+                            "persiaran": "secondary",
+                            "lorong": "residential",
+                            "lrg": "residential",
+                            "jln": "secondary"
+                        }
+                        
+                        for indicator, road_type in road_indicators.items():
+                            if indicator in name:
+                                result["inferred_highway"] = road_type
+                                found_data.append(f"inferred_highway={road_type} from name={name}")
+                                break
+                    
+                    print(f"DEBUG: Road tags found at zoom {zoom}: {', '.join(found_data)}")
+                    
+                    # If we found any useful data, return it
+                    if result and ("highway" in result or "type" in result):
+                        print(f"DEBUG: ✓ Successfully identified road information: {result}")
+                        return result
+                    
+                    print(f"DEBUG: Found data but no explicit road type, trying lower zoom level")
+                
+                elif response.status_code == 429:  # Rate limit
+                    print(f"DEBUG: Rate limited by Nominatim at zoom {zoom}, waiting 1s...")
+                    time.sleep(1)
+                else:
+                    print(f"DEBUG: Nominatim error {response.status_code} at zoom {zoom}")
+            
+            # If we get here, we've tried all zoom levels with no success
+            print(f"DEBUG: Failed to find road type after trying all zoom levels")
+            
+            # Last resort - use Overpass API to find nearest road
+            return self.find_nearest_road(lat, lon)
+            
+        except Exception as e:
+            print(f"ERROR: Exception in get_road_tags: {str(e)}")
+            return {}
+
+    def identify_access_points(self, src_lat, src_lon, warehouse_lat, warehouse_lon):
+        """
+        Identify access points along the route from a destination (src) to the warehouse.
+        For each coordinate in the route, it reverse geocodes to extract 'highway' tags.
+        Returns a list of checkpoint dicts for points where highway type is 'secondary' or 'primary'.
+        """
+        if self.client is None:
+            print("No OpenRouteService client available - cannot identify access points")
+            return []
+        try:
+            # Get the route from destination (src) to warehouse.
+            print(f"DEBUG: Calculating route from ({src_lat}, {src_lon}) to warehouse ({warehouse_lat}, {warehouse_lon})")
+            coords = [[src_lon, src_lat], [warehouse_lon, warehouse_lat]]
+            
+            try:
+                route = self.client.directions(
+                    coordinates=coords,
+                    profile='driving-car',
+                    format='geojson'
+                )
+                print(f"DEBUG: Route calculation successful, checking response structure...")
+            except Exception as route_err:
+                print(f"ERROR: Failed to calculate route: {str(route_err)}")
+                return []
+            
+            # Validate route structure
+            if not route:
+                print("ERROR: Empty route response received")
+                return []
+            if 'features' not in route:
+                print(f"ERROR: Unexpected route response structure - missing 'features' key: {route.keys()}")
+                return []
+            if not route['features']:
+                print("ERROR: No features found in route response")
+                return []
+            if 'geometry' not in route['features'][0]:
+                print(f"ERROR: No geometry in first feature: {route['features'][0].keys()}")
+                return []
+            
+            geometry = route['features'][0]['geometry']
+            if 'coordinates' not in geometry:
+                print(f"ERROR: No coordinates in geometry: {geometry.keys()}")
+                return []
+                
+            route_coords = geometry['coordinates']
+            print(f"DEBUG: Route has {len(route_coords)} coordinate points")
+            
+            access_points = []
+            # Iterate the route coordinates in order.
+            points_checked = 0
+            for i, pt in enumerate(route_coords):
+                # Only check every 5th point to avoid excessive API calls
+                if i % 5 != 0 and i != len(route_coords) - 1:  # Always check last point
+                    continue
+                
+                points_checked += 1
+                try:
+                    # pt is [lon, lat]; call our helper to get road tags.
+                    tags = self.get_road_tags(pt[1], pt[0])
+                    if tags:
+                        highway_val = tags.get("highway", "").lower()
+                        print(f"DEBUG: Point {i}: ({pt[1]}, {pt[0]}) - Highway type: {highway_val}")
+                        if highway_val in ("secondary", "primary"):
+                            access_points.append({
+                                'lat': pt[1],
+                                'lon': pt[0],
+                                'position': i,
+                                'from_type': highway_val,
+                                'to_type': highway_val  # In this context they are the same.
+                            })
+                            print(f"DEBUG: ✓ Found access point at position {i} - highway type: {highway_val}")
+                    else:
+                        print(f"DEBUG: No tags returned for point {i}: ({pt[1]}, {pt[0]})")
+                except Exception as tag_err:
+                    print(f"ERROR: Failed to get tags for point {i}: {str(tag_err)}")
+            
+            print(f"DEBUG: Checked {points_checked} out of {len(route_coords)} route points")
+            print(f"DEBUG: Identified {len(access_points)} access point(s) along the route")
+            
+            if not access_points:
+                print("DEBUG: No access points found - investigating first/last points...")
+                # Check first and last points specifically
+                for idx, desc in [(0, "first"), (-1, "last")]:
+                    try:
+                        pt = route_coords[idx]
+                        tags = self.get_road_tags(pt[1], pt[0])
+                        highway_val = tags.get("highway", "") if tags else "no tags"
+                        print(f"DEBUG: {desc.upper()} point ({pt[1]}, {pt[0]}) - Highway type: {highway_val}")
+                    except Exception as e:
+                        print(f"ERROR: Failed to check {desc} point: {str(e)}")
+            
+            return access_points
+        except Exception as e:
+            print(f"ERROR: Error identifying access points: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return []
+
     def add_location_with_smart_clustering(self, lat, lon, warehouse_lat, warehouse_lon):
         """
         Add a location to the database with smart clustering based on street pattern matching
-        with proximity fallback
+        with enhanced fallback logic.
         """
         from repositories.location_repository import LocationRepository
         from repositories.cluster_repository import ClusterRepository
         
+        print(f"DEBUG: Starting smart clustering for location ({lat}, {lon})")
+        
         # Geocode the location to get address components
         address = self.geocode_location(lat, lon)
         if not address:
-            print(f"Warning: Could not geocode location ({lat}, {lon}) - creating without address data")
+            print(f"WARNING: Could not geocode location ({lat}, {lon}) - creating without address data")
             address = {'street': '', 'neighborhood': '', 'town': '', 'city': '', 'postcode': '', 'country': ''}
+        else:
+            print(f"DEBUG: Address components: {address}")
         
         try:
             # Check if location exists
             existing_loc = LocationRepository.find_by_coordinates(lat, lon)
-            
             if existing_loc:
-                # Existing location logic
+                print(f"DEBUG: Found existing location ID: {existing_loc['id']}")
                 location_id = existing_loc['id']
                 LocationRepository.update_address(location_id, address)
-                
                 cluster_info = execute_read(
                     "SELECT cluster_id FROM location_clusters WHERE location_id = ?", 
                     (location_id,), 
                     one=True
                 )
-                
-                return location_id, cluster_info['cluster_id'] if cluster_info else None, False, None
-                
+                cluster_id = cluster_info['cluster_id'] if cluster_info else None
+                print(f"DEBUG: Existing location has cluster_id: {cluster_id}")
+                return location_id, cluster_id, False
+            
             # Insert new location
             location_id = LocationRepository.insert(lat, lon, address)
+            print(f"DEBUG: Inserted new location with ID: {location_id}")
             
-            # Get street info for clustering
-            street = address.get('street', '')
-            
-            # Extract development pattern from street name - key for smarter clustering
-            development_pattern = self._extract_development_pattern(street) if street else None
-            
+            # REFINED CLUSTERING LOGIC: Follow strict fallback sequence
             matches = []
             match_type = None
             
-            # STEP 1: First try exact street match (highest priority)
+            # 1. FIRST TRY: Exact street name matching
+            street = address.get('street', '')
             if street:
+                print(f"DEBUG: Attempting street matching with: '{street}'")
                 street_matches = LocationRepository.find_matching_street(street, location_id)
                 if street_matches:
                     matches.extend(street_matches)
                     match_type = "exact_street"
-                    print(f"Found {len(street_matches)} locations with exact street match: {street}")
+                    print(f"DEBUG: Found {len(street_matches)} locations with exact street match: {street}")
+                else:
+                    print(f"DEBUG: No exact street matches found for: {street}")
+            else:
+                print(f"DEBUG: No street name available for matching")
             
-            # STEP 2: If no exact street match, look for development pattern match
-            if not matches and development_pattern:
-                pattern_matches = LocationRepository.find_pattern_matches(development_pattern, location_id)
-                if pattern_matches:
-                    matches.extend(pattern_matches)
-                    match_type = "development_pattern"
-                    print(f"Found {len(pattern_matches)} locations with development pattern match: {development_pattern}")
-            
-            # NEW CODE: STEP 3: If still no matches, check for proximity to other locations
+            # 2. SECOND TRY: Development pattern matching
             if not matches:
-                # Find existing locations that are physically close (within 200 meters)
-                proximity_matches = LocationRepository.find_nearby_locations(lat, lon, 0.002, location_id)  # ~200m radius
+                development_pattern = self._extract_development_pattern(street, address)
+                if development_pattern:
+                    print(f"DEBUG: Attempting development pattern matching with: '{development_pattern}'")
+                    pattern_matches = LocationRepository.find_pattern_matches(development_pattern, location_id)
+                    if pattern_matches:
+                        matches.extend(pattern_matches)
+                        match_type = "development_pattern"
+                        print(f"DEBUG: Found {len(pattern_matches)} locations with development pattern match: {development_pattern}")
+                    else:
+                        print(f"DEBUG: No pattern matches found for: {development_pattern}")
+                else:
+                    print(f"DEBUG: No development pattern extracted")
+            
+            # 3. THIRD TRY: Neighborhood matching
+            if not matches:
+                neighborhood = address.get('neighborhood', '')
+                if neighborhood:
+                    print(f"DEBUG: Attempting neighborhood matching with: '{neighborhood}'")
+                    neighborhood_matches = LocationRepository.find_matching_neighborhood(neighborhood, location_id)
+                    if neighborhood_matches:
+                        matches.extend(neighborhood_matches)
+                        match_type = "neighborhood"
+                        print(f"DEBUG: Found {len(neighborhood_matches)} locations with neighborhood match: {neighborhood}")
+                    else:
+                        print(f"DEBUG: No neighborhood matches found for: {neighborhood}")
+                else:
+                    print(f"DEBUG: No neighborhood available for matching")
+            
+            # 4. FOURTH TRY: Proximity matching
+            if not matches:
+                print(f"DEBUG: Attempting proximity matching within 0.002 degrees")
+                proximity_matches = LocationRepository.find_nearby_locations(lat, lon, 0.002, location_id)
                 if proximity_matches:
                     matches.extend(proximity_matches)
                     match_type = "proximity"
-                    print(f"Found {len(proximity_matches)} locations within proximity range")
+                    print(f"DEBUG: Found {len(proximity_matches)} locations within proximity range")
                     
-                    # Extract section identifier if present (for U13/56C type addresses)
+                    # For proximity matches, try to refine by section identifier
                     section_id = self._extract_section_identifier(street)
                     if section_id:
-                        print(f"Identified section identifier: {section_id}")
-                        
-                        # If a section identifier like "U13" was found, prioritize matches with same section
+                        print(f"DEBUG: Identified section identifier: {section_id}")
                         section_matches = [m for m in proximity_matches if 
-                                         self._extract_section_identifier(m['street']) == section_id]
-                        
+                                           self._extract_section_identifier(m['street']) == section_id]
                         if section_matches:
-                            # Replace all matches with only those from same section
                             matches = section_matches
                             match_type = "section_proximity"
-                            print(f"Refined to {len(section_matches)} locations in same section: {section_id}")
+                            print(f"DEBUG: Refined to {len(section_matches)} locations in same section: {section_id}")
+                        else:
+                            print(f"DEBUG: No locations with matching section '{section_id}' found")
+                else:
+                    print(f"DEBUG: No proximity matches found within 0.002 degrees")
             
-            # Clustering logic
+            # Determine cluster based on matches
             cluster_id = None
             is_new_cluster = False
             
             if matches:
-                # Use the first match that has a cluster assigned
+                print(f"DEBUG: Processing {len(matches)} matches of type: {match_type}")
+                # First try to find an existing cluster in the matches
                 for match in matches:
                     if match['cluster_id']:
                         cluster_id = match['cluster_id']
-                        print(f"Assigning to existing cluster: {cluster_id} based on {match_type} match")
+                        print(f"DEBUG: Assigning to existing cluster: {cluster_id} based on {match_type} match")
                         break
                 
-                # If no match has a cluster, create one for all matches
+                # If no existing cluster found, create a new one
                 if not cluster_id:
-                    # Create a new cluster with pattern-based naming
                     is_new_cluster = True
+                    # Choose appropriate cluster name
+                    if match_type == "development_pattern":
+                        cluster_name = self._extract_development_pattern(street, address)
+                    elif match_type == "neighborhood":
+                        cluster_name = address.get('neighborhood', 'Unknown Area')
+                    else:
+                        cluster_name = self._extract_street_pattern(street)
                     
-                    # Generate cluster name based on the development pattern
-                    cluster_name = development_pattern or self._extract_street_pattern(street)
-                    
+                    print(f"DEBUG: Creating new cluster with name: '{cluster_name}'")
                     cluster_id = ClusterRepository.create(cluster_name, lat, lon)
-                    print(f"Created new cluster: {cluster_id} ({cluster_name}) for {match_type} match")
+                    print(f"DEBUG: Created new cluster ID: {cluster_id}")
                     
-                    # Assign all matches to this cluster
+                    # Add all matching locations to this new cluster
                     for match in matches:
+                        print(f"DEBUG: Adding matched location {match['id']} to new cluster {cluster_id}")
                         ClusterRepository.add_location_to_cluster(match['id'], cluster_id)
             else:
-                # No matches - create a new cluster with street-based naming
+                print(f"DEBUG: No matches found, creating new standalone cluster")
                 is_new_cluster = True
                 
-                # Determine best name for new cluster
-                if development_pattern:
-                    cluster_name = development_pattern
+                # Determine best cluster name when no matches found
+                if address.get('neighborhood'):
+                    cluster_name = address.get('neighborhood')
+                    print(f"DEBUG: Using neighborhood as cluster name: '{cluster_name}'")
                 elif street:
-                    cluster_name = self._extract_street_pattern(street)
+                    development_pattern = self._extract_development_pattern(street, address)
+                    if development_pattern:
+                        cluster_name = development_pattern
+                        print(f"DEBUG: Using development pattern as cluster name: '{cluster_name}'")
+                    else:
+                        cluster_name = self._extract_street_pattern(street)
+                        print(f"DEBUG: Using street pattern as cluster name: '{cluster_name}'")
                 else:
                     cluster_name = "Unknown Location"
+                    print(f"DEBUG: No identifiable name, using 'Unknown Location'")
                 
                 cluster_id = ClusterRepository.create(cluster_name, lat, lon)
-                print(f"Created new cluster: {cluster_id} ({cluster_name}) - no matches")
+                print(f"DEBUG: Created new cluster ID: {cluster_id}")
             
-            # Add the location to its cluster
+            # Add the current location to its cluster
             if cluster_id:
+                print(f"DEBUG: Adding location {location_id} to cluster {cluster_id}")
                 ClusterRepository.add_location_to_cluster(location_id, cluster_id)
+            else:
+                print(f"ERROR: Failed to determine cluster for location {location_id}")
             
-            # Modify this part in add_location_with_smart_clustering
+            # If this location initiated a new cluster, identify access points
             if is_new_cluster:
-                # After creating the cluster, identify and save its checkpoint
-                transitions = self.identify_road_transitions(lat, lon, warehouse_lat, warehouse_lon)
-                security_checkpoints = [t for t in transitions if t.get('is_potential_checkpoint')]
+                print(f"DEBUG: New cluster created - identifying access points")
+                # Try multiple methods to find checkpoints with various fallbacks
+                access_points = self.identify_access_points_with_fallbacks(lat, lon, warehouse_lat, warehouse_lon)
                 
-                if security_checkpoints:
-                    # Sort by position (earlier in route = closer to origin)
-                    security_checkpoints.sort(key=lambda x: x['position'])
-                    checkpoint = security_checkpoints[0]
-                    self.save_cluster_checkpoint(cluster_id, checkpoint)
-                    print(f"Saved security checkpoint for cluster {cluster_id}")
+                if access_points:
+                    print(f"DEBUG: Found {len(access_points)} access points")
+                    for i, ap in enumerate(access_points):
+                        checkpoint_id = self.save_cluster_checkpoint(cluster_id, ap)
+                        print(f"DEBUG: Saved access point #{i+1} (ID: {checkpoint_id}) for cluster {cluster_id} at {ap['lat']}, {ap['lon']}")
+                else:
+                    print(f"ERROR: No access points found after trying all methods")
+            
+            return location_id, cluster_id, is_new_cluster
             
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"Error in smart clustering: {str(e)}")
-            return None, None, False, None
+            print(f"ERROR: Error in smart clustering: {str(e)}")
+            return None, None, False
+
+    def save_cluster_checkpoint(self, cluster_id, checkpoint_data):
+        """Save a security checkpoint for a cluster"""
+        try:
+            print(f"DEBUG: Saving checkpoint for cluster {cluster_id}: {checkpoint_data}")
+            
+            # Check if checkpoint already exists
+            existing = execute_read(
+                "SELECT id FROM security_checkpoints WHERE cluster_id = ?",
+                (cluster_id,),
+                one=True
+            )
+            
+            if existing:
+                print(f"DEBUG: Updating existing checkpoint ID: {existing['id']}")
+                # Update existing checkpoint
+                execute_write(
+                    """UPDATE security_checkpoints 
+                       SET lat = ?, lon = ?, from_road_type = ?, to_road_type = ?
+                       WHERE cluster_id = ?""",
+                    (
+                        checkpoint_data['lat'],
+                        checkpoint_data['lon'],
+                        checkpoint_data.get('from_type', ''),
+                        checkpoint_data.get('to_type', ''),
+                        cluster_id
+                    )
+                )
+                print(f"DEBUG: Checkpoint updated successfully")
+                return existing['id']
+            else:
+                print(f"DEBUG: Creating new checkpoint for cluster {cluster_id}")
+                # Insert new checkpoint
+                checkpoint_id = execute_write(
+                    """INSERT INTO security_checkpoints
+                       (cluster_id, lat, lon, from_road_type, to_road_type, confidence)
+                       VALUES (?, ?, ?, ?, ?, 1.0)""",
+                    (
+                        cluster_id,
+                        checkpoint_data['lat'],
+                        checkpoint_data['lon'],
+                        checkpoint_data.get('from_type', ''),
+                        checkpoint_data.get('to_type', '')
+                    )
+                )
+                print(f"DEBUG: New checkpoint created with ID: {checkpoint_id}")
+                return checkpoint_id
+        except Exception as e:
+            print(f"ERROR: Failed to save cluster checkpoint: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def _extract_street_pattern(self, street):
         """
@@ -746,7 +1229,7 @@ class GeoDBSCAN:
         
         return street.title()
 
-    def _extract_development_pattern(self, street):
+    def _extract_development_pattern(self, street, neighborhood, address=None):
         """
         Extract housing development name from street patterns
         
@@ -796,6 +1279,11 @@ class GeoDBSCAN:
         residence_match = re.search(residence_pattern, street_lower, re.IGNORECASE)
         if residence_match:
             return residence_match.group(1).strip().title()
+        
+        # If street is empty but we have neighborhood info, use that
+        if (not street or street.strip() == '') and address and address.get('neighborhood'):
+            neighborhood = address.get('neighborhood')
+            print(f"DEBUG: Using neighborhood '{neighborhood}' for development pattern (no street)")
         
         # If no specific pattern matches, take the first 2 words
         words = street.split()
@@ -862,50 +1350,6 @@ class GeoDBSCAN:
         
         return len(common) / len(union)
 
-    def save_cluster_checkpoint(self, cluster_id, checkpoint_data):
-        """Save a security checkpoint for a cluster"""
-        try:
-            # Check if checkpoint already exists
-            existing = execute_read(
-                "SELECT id FROM security_checkpoints WHERE cluster_id = ?",
-                (cluster_id,),
-                one=True
-            )
-            
-            if existing:
-                # Update existing checkpoint
-                execute_write(
-                    """UPDATE security_checkpoints 
-                       SET lat = ?, lon = ?, from_road_type = ?, to_road_type = ?
-                       WHERE cluster_id = ?""",
-                    (
-                        checkpoint_data['lat'],
-                        checkpoint_data['lon'],
-                        checkpoint_data.get('from_type', ''),
-                        checkpoint_data.get('to_type', ''),
-                        cluster_id
-                    )
-                )
-                return existing['id']
-            else:
-                # Insert new checkpoint
-                checkpoint_id = execute_write(
-                    """INSERT INTO security_checkpoints
-                       (cluster_id, lat, lon, from_road_type, to_road_type, confidence)
-                       VALUES (?, ?, ?, ?, ?, 1.0)""",
-                    (
-                        cluster_id,
-                        checkpoint_data['lat'],
-                        checkpoint_data['lon'],
-                        checkpoint_data.get('from_type', ''),
-                        checkpoint_data.get('to_type', '')
-                    )
-                )
-                return checkpoint_id
-        except Exception as e:
-            print(f"Error saving cluster checkpoint: {str(e)}")
-            return None
-
     def get_cluster_checkpoint(self, cluster_id):
         """Get the security checkpoint for a cluster"""
         try:
@@ -920,3 +1364,58 @@ class GeoDBSCAN:
         except Exception as e:
             print(f"Error retrieving cluster checkpoint: {str(e)}")
             return None
+
+    def find_nearest_road(self, lat, lon, radius=100):
+        """
+        Find the nearest road to a coordinate using Overpass API.
+        This is a fallback when direct nominatim reverse doesn't yield road type.
+        
+        Args:
+            lat: Latitude
+            lon: Longitude
+            radius: Search radius in meters
+        
+        Returns:
+            dict: Road tags or empty dict if none found
+        """
+        try:
+            print(f"DEBUG: Trying to find nearest road within {radius}m of ({lat}, {lon})")
+            
+            # Overpass API query to find roads near point
+            overpass_url = "https://overpass-api.de/api/interpreter"
+            overpass_query = f"""
+            [out:json];
+            way["highway"](around:{radius},{lat},{lon});
+            out body;
+            """
+            
+            response = requests.post(overpass_url, data={"data": overpass_query}, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                elements = data.get("elements", [])
+                
+                if elements:
+                    # Sort by distance (if we could calculate it) or just take first
+                    nearest_road = elements[0]
+                    tags = nearest_road.get("tags", {})
+                    
+                    result = {
+                        "highway": tags.get("highway", "unknown"),
+                        "name": tags.get("name", "unnamed"),
+                        "is_nearest_match": True,
+                        "source": "overpass"
+                    }
+                    
+                    print(f"DEBUG: ✓ Found nearest road ({result['highway']}): {result['name']}")
+                    return result
+                
+                print(f"DEBUG: No roads found within {radius}m")
+                return {}
+            
+            print(f"DEBUG: Overpass API error {response.status_code}")
+            return {}
+            
+        except Exception as e:
+            print(f"ERROR: Exception finding nearest road: {str(e)}")
+            return {}

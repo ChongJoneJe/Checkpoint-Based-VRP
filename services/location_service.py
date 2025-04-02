@@ -152,25 +152,15 @@ class LocationService:
                     
                     # Try geocoding and clustering with better error handling
                     try:
-                        result = geocoder.add_location_with_smart_clustering_alt(
+                        result = geocoder.add_location_with_smart_clustering(
                             dest_lat, dest_lon, wh_lat, wh_lon
                         )
                         if result and isinstance(result, tuple) and len(result) == 3:
                             dest_loc_id, cluster_id, is_new_cluster = result
                         else:
-                            print(f"Smart clustering alt returned invalid result: {result}")
+                            print(f"Smart clustering returned invalid result: {result}")
                     except (ImportError, AttributeError, ValueError, TypeError) as e:
                         print(f"Smart clustering alt failed: {str(e)}")
-                        try:
-                            result = geocoder.add_location_with_smart_clustering(
-                                dest_lat, dest_lon, wh_lat, wh_lon
-                            )
-                            if result and isinstance(result, tuple) and len(result) == 3:
-                                dest_loc_id, cluster_id, is_new_cluster = result
-                            else:
-                                print(f"Smart clustering returned invalid result: {result}")
-                        except (ImportError, AttributeError, ValueError, TypeError) as e:
-                            print(f"Smart clustering failed: {str(e)}")
                     
                     # If smart clustering failed, use direct DB insertion
                     if not dest_loc_id:
