@@ -51,18 +51,18 @@ def get_db():
             conn.close()
 
 def execute_write(query, params=None):
-    """Execute a write query and return last row id"""
-    conn = get_db_connection()
     try:
+        conn = get_db_connection()
         cursor = conn.cursor()
-        if params:
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
+        cursor.execute(query, params or ())
         conn.commit()
-        return cursor.lastrowid
-    finally:
+        last_id = cursor.lastrowid
         conn.close()
+        return last_id
+    except Exception as e:
+        print(f"SQL ERROR in execute_write: {query} with params {params}")
+        print(f"Error details: {str(e)}")
+        raise
 
 def execute_read(query, params=None, one=False):
     """Execute a read query and return results"""

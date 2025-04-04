@@ -1,6 +1,7 @@
 from flask import Flask
 import os
 from utils.database import ensure_db_exists
+from algorithms.dbscan import GeoDBSCAN
 
 def create_app():
     app = Flask(__name__)
@@ -10,6 +11,7 @@ def create_app():
     
     # Configure SQLAlchemy (we'll keep it for read operations)
     app.config['ORS_API_KEY'] = '5b3ce3597851110001cf62481caff684775f4567ac619c56d44d6f05'
+    app.config['geocoder'] = GeoDBSCAN(api_key=app.config.get('ORS_API_KEY'))
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///static/data/locations.db'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {

@@ -2,6 +2,8 @@ import uuid
 import os
 from datetime import datetime
 from utils.database import execute_read, execute_write
+from repositories.cluster_repository import ClusterRepository
+from repositories.location_repository import LocationRepository
 from algorithms.dbscan import GeoDBSCAN
 from flask import current_app
 import logging
@@ -23,12 +25,12 @@ class LocationService:
         if not preset:
             return {"warehouse": None, "destinations": []}
         
-        # Get warehouse
+        # Get warehouse using the correct schema (preset_locations with is_warehouse flag)
         warehouse_query = """
             SELECT l.lat, l.lon 
             FROM locations l
-            JOIN warehouses w ON l.id = w.location_id
-            WHERE w.preset_id = ?
+            JOIN preset_locations pl ON l.id = pl.location_id
+            WHERE pl.preset_id = ? AND pl.is_warehouse = 1
         """
         warehouse = execute_read(warehouse_query, (preset['id'],), one=True)
         
@@ -48,155 +50,116 @@ class LocationService:
     
     @staticmethod
     def save_locations(name, warehouse, destinations):
-        """Save the selected warehouse and delivery locations as a preset with clustering"""
+        """Save warehouse and destinations with geocoding, then cluster them"""
         try:
-            # Get API key from app config or environment
-            api_key = os.environ.get('ORS_API_KEY')
-            if not api_key:
-                from flask import current_app
-                api_key = current_app.config.get('ORS_API_KEY')
-
-            # Initialize GeoDBSCAN with API key
-            geocoder = GeoDBSCAN(api_key=api_key)
-
-            # Print confirmation
-            if api_key:
-                print(f"Using OpenRouteService API key: {api_key[:5]}...{api_key[-5:]}")
-            else:
-                print("WARNING: No OpenRouteService API key available - checkpoint detection disabled")
-            
-            # Generate preset ID
+            # Generate a UUID for the preset ID (since it's TEXT in schema, not INTEGER)
             preset_id = str(uuid.uuid4())
             
-            # Insert preset
+            # Create the preset first
             execute_write(
-                "INSERT INTO presets (id, name, created_at) VALUES (?, ?, datetime('now'))",
+                "INSERT INTO presets (id, name) VALUES (?, ?)",
                 (preset_id, name)
             )
             
-            # Process warehouse location with geocoding
+            print(f"DEBUG: Created preset with ID {preset_id}")
+            
+            # Use the global geocoder instance
+            geocoder = current_app.config['geocoder']
+            
+            # Save warehouse location but DON'T cluster it
             wh_lat, wh_lon = warehouse
             wh_address = geocoder.geocode_location(wh_lat, wh_lon)
             
-            # Check if location exists
-            existing_wh = execute_read(
+            # Process warehouse
+            if not wh_address:
+                wh_address = {'street': '', 'neighborhood': '', 'town': '', 'city': '', 'postcode': '', 'country': ''}
+                
+            # Check if location already exists
+            existing_loc = execute_read(
                 "SELECT id FROM locations WHERE ABS(lat - ?) < 0.0001 AND ABS(lon - ?) < 0.0001",
                 (wh_lat, wh_lon),
                 one=True
             )
             
-            if existing_wh:
-                wh_loc_id = existing_wh['id']
-                # Update address info if needed
-                if wh_address:
-                    execute_write(
-                        """UPDATE locations SET 
-                           street = COALESCE(street, ?),
-                           neighborhood = COALESCE(neighborhood, ?),
-                           town = COALESCE(town, ?),
-                           city = COALESCE(city, ?),
-                           postcode = COALESCE(postcode, ?),
-                           country = COALESCE(country, ?)
-                           WHERE id = ?""",
-                        (
-                            wh_address.get('street', ''),
-                            wh_address.get('neighborhood', ''),
-                            wh_address.get('town', ''),
-                            wh_address.get('city', ''),
-                            wh_address.get('postcode', ''),
-                            wh_address.get('country', ''),
-                            wh_loc_id
-                        )
+            if existing_loc:
+                wh_loc_id = existing_loc['id']
+                # Update address if needed
+                execute_write(
+                    """UPDATE locations SET 
+                       street = ?, neighborhood = ?, town = ?, city = ?, postcode = ?, country = ?
+                       WHERE id = ?""",
+                    (
+                        wh_address.get('street', ''),
+                        wh_address.get('neighborhood', ''),
+                        wh_address.get('town', ''),
+                        wh_address.get('city', ''),
+                        wh_address.get('postcode', ''),
+                        wh_address.get('country', ''),
+                        wh_loc_id
                     )
+                )
             else:
-                # Insert with geocoded information
-                if wh_address:
-                    wh_loc_id = execute_write(
-                        """INSERT INTO locations 
-                           (lat, lon, street, neighborhood, town, city, postcode, country, created_at) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                        (
-                            wh_lat, wh_lon,
-                            wh_address.get('street', ''),
-                            wh_address.get('neighborhood', ''),
-                            wh_address.get('town', ''),
-                            wh_address.get('city', ''),
-                            wh_address.get('postcode', ''),
-                            wh_address.get('country', '')
-                        )
+                wh_loc_id = execute_write(
+                    """INSERT INTO locations 
+                       (lat, lon, street, neighborhood, town, city, postcode, country)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        wh_lat, wh_lon, 
+                        wh_address.get('street', ''),
+                        wh_address.get('neighborhood', ''),
+                        wh_address.get('town', ''),
+                        wh_address.get('city', ''),
+                        wh_address.get('postcode', ''),
+                        wh_address.get('country', '')
                     )
-                else:
-                    # Fall back to basic insert
-                    wh_loc_id = execute_write(
-                        "INSERT INTO locations (lat, lon, created_at) VALUES (?, ?, datetime('now'))",
-                        (wh_lat, wh_lon)
-                    )
+                )
             
-            # Create warehouse entry
-            execute_write(
-                "INSERT INTO warehouses (preset_id, location_id) VALUES (?, ?)",
-                (preset_id, wh_loc_id)
-            )
-            
-            # Add to preset_locations with is_warehouse=1
+            # Link warehouse to preset with is_warehouse flag in preset_locations
             execute_write(
                 "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 1)",
                 (preset_id, wh_loc_id)
             )
             
-            # Process destinations
-            for dest_lat, dest_lon in destinations:
-                try:
-                    dest_loc_id = None
-                    cluster_id = None
+            # Also add to warehouses table for backwards compatibility
+            execute_write(
+                "INSERT INTO warehouses (preset_id, location_id) VALUES (?, ?)",
+                (preset_id, wh_loc_id)
+            )
+            
+            print(f"DEBUG: Added warehouse at location {wh_loc_id} to preset {preset_id}")
+            
+            # Now process destinations with clustering
+            for dest in destinations:
+                dest_lat, dest_lon = dest
+                
+                # Don't cluster if it's the same as warehouse
+                if abs(dest_lat - wh_lat) < 0.0001 and abs(dest_lon - wh_lon) < 0.0001:
+                    print(f"DEBUG: Destination {dest_lat}, {dest_lon} is same as warehouse - skipping")
+                    continue
                     
-                    # Try geocoding and clustering with better error handling
-                    try:
-                        result = geocoder.add_location_with_smart_clustering(
-                            dest_lat, dest_lon, wh_lat, wh_lon
-                        )
-                        if result and isinstance(result, tuple) and len(result) == 3:
-                            dest_loc_id, cluster_id, is_new_cluster = result
-                        else:
-                            print(f"Smart clustering returned invalid result: {result}")
-                    except (ImportError, AttributeError, ValueError, TypeError) as e:
-                        print(f"Smart clustering alt failed: {str(e)}")
+                # Use the smart clustering which geocodes and clusters in one step
+                result = geocoder.add_location_with_smart_clustering(dest_lat, dest_lon, wh_lat, wh_lon)
+                
+                if result and isinstance(result, tuple) and len(result) >= 2:
+                    dest_loc_id, cluster_id, is_new_cluster = result
                     
-                    # If smart clustering failed, use direct DB insertion
-                    if not dest_loc_id:
-                        # Check if location exists
-                        existing_dest = execute_read(
-                            "SELECT id FROM locations WHERE ABS(lat - ?) < 0.0001 AND ABS(lon - ?) < 0.0001",
-                            (dest_lat, dest_lon),
-                            one=True
-                        )
-                        
-                        if existing_dest:
-                            dest_loc_id = existing_dest['id']
-                        else:
-                            # Insert new location
-                            dest_loc_id = execute_write(
-                                "INSERT INTO locations (lat, lon, created_at) VALUES (?, ?, datetime('now'))",
-                                (dest_lat, dest_lon)
-                            )
+                    # Link destination to preset using preset_locations table
+                    execute_write(
+                        "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 0)",
+                        (preset_id, dest_loc_id)
+                    )
                     
-                    if dest_loc_id:
-                        # Add to preset_locations with is_warehouse=0
-                        execute_write(
-                            "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 0)",
-                            (preset_id, dest_loc_id)
-                        )
-                        print(f"Successfully added location {dest_loc_id} to preset {preset_id}")
+                    if is_new_cluster:
+                        print(f"DEBUG: Created new cluster for destination {dest_loc_id}")
                     else:
-                        print(f"Failed to add location ({dest_lat}, {dest_lon}) to preset")
-                        
-                except Exception as e:
-                    print(f"Error processing destination ({dest_lat}, {dest_lon}): {str(e)}")
+                        print(f"DEBUG: Added destination {dest_loc_id} to existing cluster {cluster_id}")
+                else:
+                    print(f"WARNING: Smart clustering failed for {dest_lat}, {dest_lon}")
             
             return preset_id
             
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"Error saving locations: {str(e)}")
-            return None
+            print(f"Error in save_locations: {str(e)}")
+            raise

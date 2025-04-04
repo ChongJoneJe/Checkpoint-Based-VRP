@@ -82,80 +82,251 @@ function handleMapClick(e) {
 }
 
 /**
+ * Verify location address
+ */
+function verifyLocation(lat, lng, locationType) {
+    return fetch(`/locations/verify_location?lat=${lat}&lng=${lng}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.needs_user_input) {
+                // Show the address modal
+                return showAddressModal(lat, lng, locationType, data.suggested_values);
+            } else {
+                // No need for user input, return the address
+                return Promise.resolve(data.address);
+            }
+        })
+        .catch(error => {
+            console.error('Error verifying location:', error);
+            showNotification('Error verifying location address', 'error');
+            return Promise.reject(error);
+        });
+}
+
+/**
+ * Show the address modal and return a Promise
+ */
+function showAddressModal(lat, lng, locationType, suggestedValues) {
+    return new Promise((resolve, reject) => {
+        const modal = document.getElementById('address-modal');
+        
+        // Set hidden values
+        document.getElementById('address-lat').value = lat;
+        document.getElementById('address-lng').value = lng;
+        document.getElementById('address-type').value = locationType;
+        
+        // Fill in suggested values
+        if (suggestedValues) {
+            document.getElementById('address-section').value = suggestedValues.section || '';
+            document.getElementById('address-subsection').value = suggestedValues.subsection || '';
+            document.getElementById('address-neighborhood').value = suggestedValues.neighborhood || '';
+            document.getElementById('address-city').value = suggestedValues.city || '';
+            document.getElementById('address-postcode').value = suggestedValues.postcode || '';
+        }
+        
+        // Show the modal
+        modal.style.display = 'block';
+        
+        // Create a mini map showing the selected location
+        const previewMap = L.map('modal-map-preview').setView([lat, lng], 17);
+        
+        // Add base tile layer
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(previewMap);
+        
+        // Add marker for the selected location
+        L.marker([lat, lng]).addTo(previewMap);
+        
+        // Fix the map after rendering (needed because the map is initially hidden)
+        setTimeout(() => {
+            previewMap.invalidateSize();
+        }, 100);
+        
+        // Focus the street input
+        document.getElementById('address-street').focus();
+        
+        // Handle form submission
+        document.getElementById('address-form').onsubmit = function(e) {
+            e.preventDefault();
+            
+            // Get section and subsection
+            const section = document.getElementById('address-section').value.trim();
+            const subsection = document.getElementById('address-subsection').value.trim();
+            let street = document.getElementById('address-street').value.trim();
+            
+            // Format street name properly with section/subsection if provided
+            if (section && subsection) {
+                // Check if street already includes section/subsection
+                const sectionPattern = `${section}/${subsection}`;
+                if (street && !street.toUpperCase().includes(sectionPattern.toUpperCase())) {
+                    street = `${street} ${section}/${subsection}`;
+                } else if (!street) {
+                    street = `Jalan ${section}/${subsection}`;
+                }
+            }
+            
+            const addressData = {
+                lat: document.getElementById('address-lat').value,
+                lng: document.getElementById('address-lng').value,
+                street: street,
+                section: section,
+                subsection: subsection,
+                neighborhood: document.getElementById('address-neighborhood').value,
+                city: document.getElementById('address-city').value,
+                postcode: document.getElementById('address-postcode').value,
+                country: 'Malaysia'
+            };
+            
+            // Submit address to the server
+            fetch('/locations/save_address', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(addressData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    modal.style.display = 'none';
+                    resetAddressForm();
+                    // Clean up the map
+                    previewMap.remove();
+                    resolve(data.address);
+                } else {
+                    showNotification('Error saving address: ' + data.message, 'error');
+                    reject(new Error(data.message));
+                }
+            })
+            .catch(error => {
+                console.error('Error saving address:', error);
+                showNotification('Failed to save address', 'error');
+                reject(error);
+            });
+        };
+        
+        // Handle cancel button
+        document.getElementById('cancel-address').onclick = function() {
+            modal.style.display = 'none';
+            resetAddressForm();
+            // Clean up the map
+            previewMap.remove();
+            reject(new Error('Address input canceled'));
+        };
+        
+        // Handle modal close button
+        document.querySelector('.close-modal').onclick = function() {
+            modal.style.display = 'none';
+            resetAddressForm();
+            // Clean up the map
+            previewMap.remove();
+            reject(new Error('Address input canceled'));
+        };
+    });
+}
+
+/**
+ * Reset the address form
+ */
+function resetAddressForm() {
+    document.getElementById('address-form').reset();
+}
+
+/**
  * Set the warehouse location
  */
 function setWarehouse(lat, lng) {
-    // Remove existing warehouse marker if any
-    if (warehouseMarker) {
-        map.removeLayer(warehouseMarker);
-    }
-    
-    // Store new warehouse location
-    warehouse = [lat, lng];
-    
-    // Add warehouse marker
-    warehouseMarker = L.marker([lat, lng], {
-        icon: L.divIcon({
-            className: 'warehouse-marker',
-            html: '<div class="warehouse-icon"></div>',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
+    // Verify location first
+    verifyLocation(lat, lng, 'warehouse')
+        .then(address => {
+            // Remove existing warehouse marker if any
+            if (warehouseMarker) {
+                map.removeLayer(warehouseMarker);
+            }
+            
+            // Store new warehouse location
+            warehouse = [lat, lng];
+            
+            // Add warehouse marker
+            warehouseMarker = L.marker([lat, lng], {
+                icon: L.divIcon({
+                    className: 'warehouse-marker',
+                    html: '<div class="warehouse-icon"></div>',
+                    iconSize: [24, 24],
+                    iconAnchor: [12, 12]
+                })
+            }).addTo(map);
+            
+            // Add popup with coordinates and address
+            const addressText = address.street ? `<br>${address.street}` : '';
+            warehouseMarker.bindPopup(`Warehouse<br>${lat.toFixed(6)}, ${lng.toFixed(6)}${addressText}`);
+            
+            // Update sidebar display
+            document.getElementById('warehouse-display').innerHTML = `
+                <h3>Warehouse</h3>
+                <p class="coords">${lat.toFixed(6)}, ${lng.toFixed(6)}</p>
+                ${address.street ? `<p class="address">${address.street}</p>` : ''}
+            `;
+            
+            // Switch to destination mode after setting warehouse
+            setLocationMode('destination');
+            
+            showNotification('Warehouse location set!');
         })
-    }).addTo(map);
-    
-    // Add popup with coordinates
-    warehouseMarker.bindPopup(`Warehouse<br>${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-    
-    // Update sidebar display
-    document.getElementById('warehouse-display').innerHTML = `
-        <h3>Warehouse</h3>
-        <p class="coords">${lat.toFixed(6)}, ${lng.toFixed(6)}</p>
-    `;
-    
-    // Switch to destination mode after setting warehouse
-    setLocationMode('destination');
-    
-    showNotification('Warehouse location set!');
+        .catch(error => {
+            console.error('Error setting warehouse:', error);
+            showNotification('Failed to set warehouse location', 'error');
+        });
 }
 
 /**
  * Add a destination location
  */
 function addDestination(lat, lng) {
-    const index = destinations.length;
-    destinations.push([lat, lng]);
-    
-    // Create marker for this destination
-    const marker = L.marker([lat, lng], {
-        icon: L.divIcon({
-            className: 'destination-marker',
-            html: `<div class="destination-icon">${index + 1}</div>`,
-            iconSize: [22, 22],
-            iconAnchor: [11, 11]
-        }),
-        contextmenu: true,
-        contextmenuItems: [{
-            text: 'Remove this destination',
-            callback: function() {
+    // Verify location first
+    verifyLocation(lat, lng, 'destination')
+        .then(address => {
+            const index = destinations.length;
+            destinations.push([lat, lng]);
+            
+            // Create marker for this destination
+            const marker = L.marker([lat, lng], {
+                icon: L.divIcon({
+                    className: 'destination-marker',
+                    html: `<div class="destination-icon">${index + 1}</div>`,
+                    iconSize: [22, 22],
+                    iconAnchor: [11, 11]
+                }),
+                contextmenu: true,
+                contextmenuItems: [{
+                    text: 'Remove this destination',
+                    callback: function() {
+                        removeDestinationByMarker(marker);
+                    }
+                }]
+            }).addTo(map);
+            
+            // Add popup with information and address
+            const addressText = address.street ? `<br>${address.street}` : '';
+            marker.bindPopup(`Destination ${index + 1}<br>${lat.toFixed(6)}, ${lng.toFixed(6)}${addressText}`);
+            
+            // Add right-click handler for quick removal
+            marker.on('contextmenu', function() {
                 removeDestinationByMarker(marker);
-            }
-        }]
-    }).addTo(map);
-    
-    // Add popup with information
-    marker.bindPopup(`Destination ${index + 1}<br>${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-    
-    // Add right-click handler for quick removal
-    marker.on('contextmenu', function() {
-        removeDestinationByMarker(marker);
-    });
-    
-    destinationMarkers.push(marker);
-    
-    // Update destination list in sidebar
-    updateDestinationsList();
-    
-    showNotification('Destination added!');
+            });
+            
+            destinationMarkers.push(marker);
+            
+            // Update destination list in sidebar
+            updateDestinationsList();
+            
+            showNotification('Destination added!');
+        })
+        .catch(error => {
+            console.error('Error adding destination:', error);
+            showNotification('Failed to add destination', 'error');
+        });
 }
 
 /**

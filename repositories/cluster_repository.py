@@ -5,12 +5,20 @@ class ClusterRepository:
     """Handles all database operations related to clusters"""
     
     @staticmethod
-    def create(name, centroid_lat, centroid_lon):
-        """Create a new cluster"""
-        return execute_write(
-            "INSERT INTO clusters (name, centroid_lat, centroid_lon) VALUES (?, ?, ?)",
-            (name, centroid_lat, centroid_lon)
-        )
+    def create(name, lat, lon):
+        """Create a new cluster with name and centroid coordinates"""
+        try:
+            cluster_id = execute_write(
+                """
+                INSERT INTO clusters (name, centroid_lat, centroid_lon)
+                VALUES (?, ?, ?)
+                """,
+                (name, lat, lon)
+            )
+            return cluster_id
+        except Exception as e:
+            print(f"Error creating cluster: {str(e)}")
+            return None
     
     @staticmethod
     def add_location_to_cluster(location_id, cluster_id):
@@ -36,24 +44,23 @@ class ClusterRepository:
             )
     
     @staticmethod
-    def update_checkpoint(cluster_id, checkpoint_lat, checkpoint_lon, description=None):
+    def update_checkpoint(cluster_id, checkpoint_lat, checkpoint_lon):
         """Update cluster checkpoint information"""
         return execute_write(
             """UPDATE clusters 
-               SET checkpoint_lat = ?, checkpoint_lon = ?, checkpoint_description = ?
-               WHERE id = ?""",
-            (checkpoint_lat, checkpoint_lon, description, cluster_id)
+               SET checkpoint_lat = ?, checkpoint_lon = ? WHERE id = ?""",
+            (checkpoint_lat, checkpoint_lon,  cluster_id)
         )
     
     @staticmethod
-    def save_checkpoint(cluster_id, checkpoint_lat, checkpoint_lon, description=None, transition_type=None):
+    def save_checkpoint(cluster_id, checkpoint_lat, checkpoint_lon, ransition_type=None):
         """Save security checkpoint information for a cluster"""
         return execute_write(
             """UPDATE clusters 
                SET checkpoint_lat = ?, checkpoint_lon = ?, 
-                   checkpoint_description = ?, road_transition_type = ?
-               WHERE id = ?""",
-            (checkpoint_lat, checkpoint_lon, description, transition_type, cluster_id)
+                   road_transition_type = ?
+               WHERE id = ?"""
+            (checkpoint_lat, checkpoint_lon, cluster_id)
         )
     
     @staticmethod
@@ -72,7 +79,7 @@ class ClusterRepository:
         """Get all clusters for a preset"""
         return execute_read(
             """SELECT DISTINCT c.id, c.name, c.centroid_lat, c.centroid_lon, 
-                            c.checkpoint_lat, c.checkpoint_lon, c.checkpoint_description
+                            c.checkpoint_lat, c.checkpoint_lon
                FROM clusters c
                JOIN location_clusters lc ON c.id = lc.cluster_id
                JOIN preset_locations pl ON lc.location_id = pl.location_id

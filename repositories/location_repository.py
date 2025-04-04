@@ -5,14 +5,19 @@ class LocationRepository:
     
     @staticmethod
     def find_by_coordinates(lat, lon, tolerance=0.0001):
-        """Find location by coordinates with tolerance"""
-        return execute_read(
-            """SELECT id, street, neighborhood, town, city, postcode, country
-               FROM locations
-               WHERE ABS(lat - ?) < ? AND ABS(lon - ?) < ?""",
+        """Find location by coordinates with tolerance and return full address"""
+        row = execute_read(
+            """SELECT id, lat, lon, street, neighborhood, town, city, postcode, country
+            FROM locations
+            WHERE ABS(lat - ?) < ? AND ABS(lon - ?) < ?""",
             (lat, tolerance, lon, tolerance),
             one=True
         )
+        
+        # Convert Row object to dict to enable get() method usage
+        if row:
+            return dict(row)
+        return None
     
     @staticmethod
     def insert(lat, lon, address_data):
@@ -174,3 +179,18 @@ class LocationRepository:
         
         # Further filter the results to only include locations that actually have a cluster assigned
         return [loc for loc in results if loc['cluster_id'] is not None]
+    
+    @staticmethod
+    def find_or_insert(lat, lon, address):
+        """Find existing location or insert a new one"""
+        existing = LocationRepository.find_by_coordinates(lat, lon)
+        
+        if existing:
+            location_id = existing['id']
+            # Update address if needed
+            if (existing.get('street') != address.get('street') or
+                existing.get('neighborhood') != address.get('neighborhood')):
+                LocationRepository.update_address(location_id, address)
+            return location_id
+        else:
+            return LocationRepository.insert(lat, lon, address)
