@@ -89,13 +89,14 @@ CREATE TABLE IF NOT EXISTS location_intersections (
 
 CREATE TABLE IF NOT EXISTS security_checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cluster_id INTEGER,
+    cluster_id INTEGER NOT NULL,
     lat REAL NOT NULL,
     lon REAL NOT NULL,
     from_road_type TEXT,
     to_road_type TEXT,
-    confidence REAL DEFAULT 1.0,
-    FOREIGN KEY (cluster_id) REFERENCES clusters(id)
+    confidence REAL DEFAULT 0.7,
+    source TEXT,
+    FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS route_cache (

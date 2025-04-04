@@ -11,12 +11,15 @@ def create_app():
     
     # Configure SQLAlchemy (we'll keep it for read operations)
     app.config['ORS_API_KEY'] = '5b3ce3597851110001cf62481caff684775f4567ac619c56d44d6f05'
-    app.config['geocoder'] = GeoDBSCAN(api_key=app.config.get('ORS_API_KEY'))
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///static/data/locations.db'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'connect_args': {'timeout': 30, 'check_same_thread': False}
     }
+    
+    # Initialize geocoder only once
+    geocoder = GeoDBSCAN(api_key=app.config.get('ORS_API_KEY'))
+    app.config['geocoder'] = geocoder
     
     # Import and initialize database
     from models import db
@@ -28,7 +31,8 @@ def create_app():
     
     return app
 
-app = create_app()
-
 if __name__ == '__main__':
+    app = create_app()
     app.run(debug=True)
+else:
+    app = create_app()

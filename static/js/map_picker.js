@@ -249,6 +249,9 @@ function setWarehouse(lat, lng) {
             // Store new warehouse location
             warehouse = [lat, lng];
             
+            // Save warehouse location to session storage
+            saveLocation(lat, lng, true);
+            
             // Add warehouse marker
             warehouseMarker = L.marker([lat, lng], {
                 icon: L.divIcon({
@@ -290,6 +293,9 @@ function addDestination(lat, lng) {
         .then(address => {
             const index = destinations.length;
             destinations.push([lat, lng]);
+            
+            // Save destination location to session storage
+            saveLocation(lat, lng);
             
             // Create marker for this destination
             const marker = L.marker([lat, lng], {
@@ -902,8 +908,48 @@ function hideLoadingIndicator() {
     }
 }
 
+/**
+ * Save location to session storage
+ */
+function saveLocation(lat, lon, isWarehouse = false) {
+    if (isWarehouse) {
+        sessionStorage.setItem('warehouseLocation', JSON.stringify({lat, lon}));
+    } else {
+        let locations = JSON.parse(sessionStorage.getItem('selectedLocations') || '[]');
+        locations.push({lat, lon});
+        sessionStorage.setItem('selectedLocations', JSON.stringify(locations));
+    }
+}
+
 // Clean up the event listeners at the bottom of your file
 document.addEventListener('DOMContentLoaded', function() {
+    // Clear any stored location data
+    sessionStorage.removeItem('selectedLocations');
+    sessionStorage.removeItem('warehouseLocation');
+    localStorage.removeItem('selectedLocations');
+    localStorage.removeItem('warehouseLocation');
+    
+    // Reset any existing markers
+    if (typeof markers !== 'undefined') {
+        markers.forEach(marker => {
+            if (marker) marker.remove();
+        });
+    }
+    markers = [];
+    
+    // Reset counters and displays
+    document.getElementById('count-badge').textContent = '0';
+    document.getElementById('destinations-list').innerHTML = '';
+    document.getElementById('warehouse-display').innerHTML = '';
+    
+    // Reset buttons to initial state
+    document.getElementById('warehouse-btn').classList.remove('active');
+    document.getElementById('destination-btn').classList.add('active');
+    
+    // Load any stored locations
+    const storedLocations = JSON.parse(sessionStorage.getItem('selectedLocations') || '[]');
+    const warehouseLocation = JSON.parse(sessionStorage.getItem('warehouseLocation') || 'null');
+    
     // Initialize map with default center if not provided
     if (typeof initMap === 'function' && typeof lat === 'undefined') {
         initMap(3.1390, 101.6869); // Default to Malaysia
@@ -922,7 +968,5 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Set up the save button with direct prompt
     document.getElementById('save-btn').addEventListener('click', promptSaveLocations);
-    
-    // Load previously saved locations if any
-    loadSavedLocations();
+
 });

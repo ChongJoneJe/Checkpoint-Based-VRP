@@ -19,8 +19,8 @@
                     <li>Save your selections when done</li>
                 </ol>
                 
-                <button id="warehouse-btn" class="btn">Set Warehouse</button>
-                <button id="destination-btn" class="btn active">Add Destination</button>
+                <button id="warehouse-btn" class="btn active">Set Warehouse</button>
+                <button id="destination-btn" class="btn">Add Destination</button>
                 <div class="btn-group">
                     <button id="clear-btn" class="btn btn-warning">Clear All</button>
                     <button id="save-btn" class="btn btn-success">Save Locations</button>
@@ -72,9 +72,6 @@
         const lat = {{ center_lat | tojson | safe }};
         const lng = {{ center_lng | tojson | safe }};
         initMap(lat, lng);
-        
-        // Load any previously saved locations
-        loadSavedLocations();
     </script>
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -240,5 +237,47 @@
         cursor: pointer;
     }
     </style>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Clear any stored location data
+        sessionStorage.removeItem('selectedLocations');
+        sessionStorage.removeItem('warehouseLocation');
+        
+        // Reset any existing markers if they exist
+        if (typeof markers !== 'undefined') {
+            markers.forEach(marker => {
+                if (marker) marker.remove();
+            });
+        }
+        
+        // Reset location list
+        const locationList = document.getElementById('selected-locations');
+        if (locationList) {
+            locationList.innerHTML = '';
+        }
+        
+        // Reset warehouse indicator
+        const warehouseIndicator = document.getElementById('warehouse-indicator');
+        if (warehouseIndicator) {
+            warehouseIndicator.style.display = 'none';
+        }
+        
+        // Reset address form
+        const addressForm = document.getElementById('address-form');
+        if (addressForm) {
+            addressForm.reset();
+        }
+
+        // Ensure warehouse button is active and destination button is inactive
+        document.getElementById('warehouse-btn').classList.add('active');
+        document.getElementById('destination-btn').classList.remove('active');
+        
+        // Set the initial location mode to 'warehouse'
+        if (typeof setLocationMode === 'function') {
+            setLocationMode('warehouse');
+        }
+    });
+    </script>
 </body>
 </html>

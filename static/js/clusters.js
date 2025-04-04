@@ -3,6 +3,7 @@ let clusterMarkers = [];
 let warehouseMarker = null;
 let currentPreset = 'all';
 let checkpointMarkers = [];
+let clusterMap = null; // Added global variable for clusterMap
 
 // More color options for visualizing clusters
 const clusterColors = [
@@ -51,12 +52,7 @@ function getClusterColor(clusterId) {
 // Initialize map
 function initMap() {
     // Center on Malaysia by default
-    map = L.map('map').setView([3.1390, 101.6869], 12);
-    
-    // Add OpenStreetMap tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+    map = initializeMap(); // Updated to use initializeMap function
     
     // Add scale control
     L.control.scale().addTo(map);
@@ -84,6 +80,19 @@ function initMap() {
             }
         });
     });
+}
+
+// Modify your map initialization
+function initializeMap() {
+    const map = L.map('map').setView([3.1390, 101.6869], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    
+    // Make available globally
+    clusterMap = map;
+    
+    return map;
 }
 
 // Update this function in clusters.js
@@ -435,6 +444,24 @@ function clearClusterMarkers() {
         map.removeLayer(warehouseMarker);
         warehouseMarker = null;
     }
+}
+
+// Make sure to update your selectCluster function to call the checkpoints module:
+function selectCluster(clusterId) {
+    // Your existing code...
+    
+    // Highlight the selected cluster
+    document.querySelectorAll('.cluster-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    
+    const selectedItem = document.querySelector(`.cluster-item[data-cluster-id="${clusterId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('active');
+    }
+    
+    // This triggers the checkpoint loading
+    // The checkpoint module will listen for these clicks through event delegation
 }
 
 // Initialize the map when the page is loaded

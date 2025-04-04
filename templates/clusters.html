@@ -52,6 +52,43 @@
             font-weight: bold;
             color: #666;
         }
+        
+        .checkpoint-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 4px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .checkpoint-icon i {
+            color: white;
+            font-size: 14px;
+        }
+        
+        .checkpoint-item {
+            padding: 8px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+        }
+        
+        .checkpoint-item .badge {
+            margin-left: 10px;
+        }
+        
+        .checkpoint-color-sample {
+            width: 10px;
+            height: 10px;
+            display: inline-block;
+            margin-right: 5px;
+            border-radius: 50%;
+        }
     </style>
 </head>
 <body>
@@ -87,11 +124,37 @@
                 <p>Loading clusters...</p>
             </div>
 
-            <div class="form-check mt-3">
-                <input class="form-check-input" type="checkbox" id="show-checkpoints" checked>
-                <label class="form-check-label" for="show-checkpoints">
-                    Show Security Checkpoints
-                </label>
+            <div id="checkpoint-controls" class="card mt-3 mb-3">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0">Security Checkpoints</h5>
+                </div>
+                <div class="card-body">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="show-checkpoints" checked>
+                        <label class="form-check-label" for="show-checkpoints">
+                            Show checkpoints on map
+                        </label>
+                    </div>
+                    
+                    <div class="btn-group mb-3" role="group">
+                        <button id="generate-checkpoints-btn" class="btn btn-primary">
+                            <i class="fas fa-magic mr-1"></i> Auto-Generate Checkpoints
+                        </button>
+                        <button id="toggle-edit-checkpoints-btn" class="btn btn-outline-secondary">
+                            <i class="fas fa-edit mr-1"></i> Edit Mode
+                        </button>
+                        <button id="save-checkpoints-btn" class="btn btn-success" style="display: none;">
+                            <i class="fas fa-save mr-1"></i> Save Changes
+                        </button>
+                    </div>
+                    
+                    <div id="checkpoint-list" class="mt-3">
+                        <h6>Access Points</h6>
+                        <div class="checkpoint-items">
+                            <p class="text-muted">Select a cluster to view checkpoints</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -100,6 +163,8 @@
     
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="{{ url_for('static', filename='js/clusters.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/shapely@0.1.7/dist/shapely.min.js"></script>
+    <script src="{{ url_for('static', filename='js/checkpoints.js') }}"></script>
     <script>
         document.getElementById('show-checkpoints').addEventListener('change', function() {
             const visible = this.checked;

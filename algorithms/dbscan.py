@@ -8,6 +8,7 @@ import os
 import time
 import re
 from utils.database import execute_read, execute_write
+from algorithms.network_analyzer import NetworkAnalyzer
 
 class GeoDBSCAN:
     """Enhanced DBSCAN algorithm with geocoding and checkpoint detection"""
@@ -29,7 +30,10 @@ class GeoDBSCAN:
                 print(f"Error initializing OpenRouteService client: {str(e)}")
         else:
             print("No API key provided for OpenRouteService")
-    
+        
+        # Initialize NetworkAnalyzer for checkpoint detection
+        self.network_analyzer = NetworkAnalyzer()
+
     def geocode_location(self, lat, lon):
         """
         Geocode a location to get address components using Nominatim with one attempt per zoom level
@@ -429,7 +433,7 @@ class GeoDBSCAN:
         Example: 'jalan setia nusantara u13/22t' -> 'jalan setia nusantara u13/22'
         
         Args:
-            street (str): Original street name
+            cluster_id: ID of the cluster
             
         Returns:
             str: Normalized street name
@@ -840,8 +844,8 @@ class GeoDBSCAN:
                    (l.lon BETWEEN ? AND ?)
                )
                LIMIT 5""",
-            (
-                lat - 0.003, lat + 0.003,  # About 300m radius
+                    (
+                        lat - 0.003, lat + 0.003,  # About 300m radius
                 lon - 0.003, lon + 0.003
             )
         )
@@ -1084,3 +1088,72 @@ class GeoDBSCAN:
         
         print(f"DEBUG: Cleaned {updated} location street names in database")
         return updated
+    
+    def identify_cluster_access_points(self, cluster_id):
+        """
+        Identify access points for a cluster using network topology
+        
+        Args:
+            cluster_id: ID of the cluster
+            
+        Returns:
+            list: List of checkpoint dictionaries
+        """
+        print(f"DEBUG: Identifying access points for cluster {cluster_id}")
+        
+        # 1. Get all locations in this cluster
+        locations = execute_read(
+            """SELECT l.id, l.lat, l.lon 
+            FROM locations l
+            JOIN location_clusters lc ON l.id = lc.location_id
+            WHERE lc.cluster_id = ?""",
+            (cluster_id,)
+        )
+        
+        if not locations:
+            print(f"DEBUG: No locations found for cluster {cluster_id}")
+            return []
+        
+        # 2. Get cluster center
+        cluster_info = execute_read(
+            "SELECT name, centroid_lat, centroid_lon FROM clusters WHERE id = ?",
+            (cluster_id,),
+            one=True
+        )
+        
+        # Prepare inputs for network analysis
+        location_coords = [(loc['lat'], loc['lon']) for loc in locations]
+        cluster_center = (cluster_info['centroid_lat'], cluster_info['centroid_lon'])
+        
+        # 3. Use network analysis to find access points
+        try:
+            access_points = self.network_analyzer.find_cluster_access_points(
+                location_coords, cluster_center
+            )
+            
+            # 4. Save the access points to the database
+            for ap in access_points:
+                checkpoint_id = execute_write(
+                    """INSERT INTO security_checkpoints 
+                    (cluster_id, lat, lon, from_road_type, to_road_type, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        cluster_id, 
+                        ap['lat'], 
+                        ap['lon'], 
+                        ap['from_type'], 
+                        ap['to_type'],
+                        ap.get('confidence', 1.0)
+                    )
+                )
+                print(f"DEBUG: Created checkpoint {checkpoint_id} for cluster {cluster_id}")
+            
+            return access_points
+        
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"DEBUG: Error in network analysis: {str(e)}")
+            
+            # Fall back to simple method if network analysis fails
+            return self._calculate_fallback_checkpoint(cluster_id, locations)
