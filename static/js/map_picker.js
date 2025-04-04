@@ -147,21 +147,25 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
         document.getElementById('address-street').focus();
         
         // Handle form submission
-        document.getElementById('address-form').onsubmit = function(e) {
+        document.getElementById('address-form').addEventListener('submit', function(e) {
             e.preventDefault();
             
-            // Get section and subsection
-            const section = document.getElementById('address-section').value.trim();
-            const subsection = document.getElementById('address-subsection').value.trim();
+            // Get form values
             let street = document.getElementById('address-street').value.trim();
+            let section = document.getElementById('address-section').value.trim().toUpperCase();
+            let subsection = document.getElementById('address-subsection').value.trim();
+            let neighborhood = document.getElementById('address-neighborhood').value.trim();
+            let city = document.getElementById('address-city').value.trim();
+            let postcode = document.getElementById('address-postcode').value.trim();
             
-            // Format street name properly with section/subsection if provided
+            // Format street name consistently with backend logic
             if (section && subsection) {
-                // Check if street already includes section/subsection
-                const sectionPattern = `${section}/${subsection}`;
-                if (street && !street.toUpperCase().includes(sectionPattern.toUpperCase())) {
+                const sectionPattern = new RegExp(`${section}[\\s/\\\\-]*${subsection}`, 'i');
+                if (street && !sectionPattern.test(street)) {
+                    // If street doesn't already include section/subsection, add it
                     street = `${street} ${section}/${subsection}`;
                 } else if (!street) {
+                    // If no street name provided, create one
                     street = `Jalan ${section}/${subsection}`;
                 }
             }
@@ -170,15 +174,13 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                 lat: document.getElementById('address-lat').value,
                 lng: document.getElementById('address-lng').value,
                 street: street,
-                section: section,
-                subsection: subsection,
-                neighborhood: document.getElementById('address-neighborhood').value,
-                city: document.getElementById('address-city').value,
-                postcode: document.getElementById('address-postcode').value,
+                neighborhood: neighborhood,
+                city: city,
+                postcode: postcode,
                 country: 'Malaysia'
             };
             
-            // Submit address to the server
+            // Submit to server
             fetch('/locations/save_address', {
                 method: 'POST',
                 headers: {
@@ -189,22 +191,21 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    modal.style.display = 'none';
-                    resetAddressForm();
-                    // Clean up the map
-                    previewMap.remove();
-                    resolve(data.address);
+                    document.getElementById('address-form-container').style.display = 'none';
+                    showNotification(`Address saved successfully to cluster: ${data.cluster_name}`, 'success');
+                    
+                    // Update map markers if needed
+                    updateMarker(parseFloat(addressData.lat), parseFloat(addressData.lng), 
+                                data.address.street || 'Unknown location');
                 } else {
-                    showNotification('Error saving address: ' + data.message, 'error');
-                    reject(new Error(data.message));
+                    showNotification('Error: ' + data.message, 'error');
                 }
             })
             .catch(error => {
-                console.error('Error saving address:', error);
-                showNotification('Failed to save address', 'error');
-                reject(error);
+                console.error('Error:', error);
+                showNotification('Error saving address: ' + error, 'error');
             });
-        };
+        });
         
         // Handle cancel button
         document.getElementById('cancel-address').onclick = function() {

@@ -90,6 +90,9 @@ class GeoDBSCAN:
                             'postcode': address.get('postcode', ''),
                             'country': address.get('country', '')
                         }
+                        if result:
+                            # Clean up any stray letters in street names
+                            result = self._cleanup_geocoded_address(result)
                         return result
                     print(f"DEBUG: No street found at zoom level {zoom}")
                 
@@ -226,251 +229,171 @@ class GeoDBSCAN:
                 print(f"DEBUG: Location ({lat}, {lon}) is the warehouse - excluding from clustering")
                 return location_id, None, False
             
-            # Format street with section/subsection properly if needed
-            if address and address.get('street'):
-                # Check if we need to extract section/subsection
-                street = address.get('street', '')
-                section, subsection = self._extract_section_identifier(street)
-                
-                # If we found a section but it's not properly formatted, reformat it
-                if section and subsection and f"{section}/{subsection}" not in street:
-                    formatted_street = self._format_street_with_section(street, section, subsection)
-                    if formatted_street != street:
-                        print(f"DEBUG: Reformatted street from '{street}' to '{formatted_street}'")
-                        address['street'] = formatted_street
-                        # Update the location with reformatted street
-                        if existing_loc:
-                            LocationRepository.update_address(location_id, address)
-            
-            # Get the street from address
-            street = address.get('street', '').lower()
+            # Get the street from address and clean it
+            street = address.get('street', '').strip()
             neighborhood = address.get('neighborhood', '')
-            
-            cluster_id = None
-            is_new_cluster = False
-            
-            # Skip clustering if we don't have street information
+
+            # Skip if no street information
             if not street:
                 print(f"DEBUG: No street information for location {location_id}, skipping clustering")
                 return location_id, None, False
-            
-            print(f"DEBUG: Attempting to cluster location with street: {street}")
-            
-            print(f"DEBUG: Trying strategy 1: Exact section matching")
-            # 1. FIRST CLUSTERING STRATEGY: Exact section matching
-            # Extract section identifiers from this location (e.g., U13/21)
-            section, subsection = self._extract_section_identifier(street)
-            
-            if section and subsection:
-                print(f"DEBUG: Extracted section/subsection: {section}/{subsection}")
-                
-                # Search for existing clusters with matching section/subsection
-                query = """
-                    SELECT c.id, c.name 
-                    FROM clusters c 
-                    WHERE c.name LIKE ? 
-                    ORDER BY c.id DESC
-                    LIMIT 1
+
+            # Clean up the street name
+            cleaned_address = self._cleanup_geocoded_address({'street': street})
+            street = cleaned_address['street']
+            print(f"DEBUG: Using clean street name: {street}")
+
+            # Extract street components for cluster naming
+            street_parts = self._extract_street_parts(self._normalize_street_name(street))
+            section = street_parts['section']
+            subsection = street_parts['subsection']
+            development_pattern = street_parts['development'].title()
+            block = street_parts['block']
+
+            # Initialize variables
+            cluster_id = None
+            is_new_cluster = False
+
+            print(f"DEBUG: Trying to find matching street for '{street}'")
+            # Find exact matches first
+            query = """
+                SELECT lc.cluster_id, l.street, c.name as cluster_name 
+                FROM locations l
+                JOIN location_clusters lc ON l.id = lc.location_id
+                JOIN clusters c ON lc.cluster_id = c.id
+                WHERE l.street IS NOT NULL AND l.street != ''
+                LIMIT 100
+            """
+            matching_locations = execute_read(query)
+
+            if matching_locations:
+                for loc in matching_locations:
+                    if self._compare_street_paths(street, loc['street']):
+                        print(f"DEBUG: Found matching street: '{loc['street']}' in cluster: {loc['cluster_name']}")
+                        cluster_id = loc['cluster_id']
+                        
+                        # Assign location to this cluster
+                        execute_write(
+                            "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
+                            (location_id, cluster_id)
+                        )
+                        return location_id, cluster_id, False
+
+            # If no match, try proximity clustering as fallback
+            print(f"DEBUG: No exact street match found, trying proximity matching")
+            nearby_locations = execute_read(
                 """
+                SELECT l.id, l.street, lc.cluster_id, c.name as cluster_name
+                FROM locations l
+                LEFT JOIN location_clusters lc ON l.id = lc.location_id
+                LEFT JOIN clusters c ON lc.cluster_id = c.id
+                WHERE (
+                    (l.lat BETWEEN ? AND ?) AND 
+                    (l.lon BETWEEN ? AND ?) AND
+                    l.id != ? AND
+                    lc.cluster_id IS NOT NULL
+                )
+                """,
+                (
+                    lat - 0.003, lat + 0.003,  # About 300m radius
+                    lon - 0.003, lon + 0.003,
+                    location_id
+                )
+            )
+
+            if nearby_locations:
+                # Group nearby locations by cluster
+                cluster_counts = {}
+                for loc in nearby_locations:
+                    cluster_id = loc['cluster_id']
+                    if cluster_id:
+                        if cluster_id not in cluster_counts:
+                            cluster_counts[cluster_id] = {
+                                'count': 0,
+                                'name': loc['cluster_name']
+                            }
+                        cluster_counts[cluster_id]['count'] += 1
                 
-                # Look for pattern where section/subsection is at the end of cluster name
-                # (handles both "Setia Duta U13/21" and just "U13/21")
-                pattern = f"%{section}/{subsection}"
-                existing_cluster = execute_read(query, (pattern,), one=True)
+                # Find the most common cluster in the area
+                max_count = 0
+                nearest_cluster_id = None
+                nearest_cluster_name = None
                 
-                if existing_cluster:
-                    print(f"DEBUG: Found matching section cluster: {existing_cluster['name']}")
-                    cluster_id = existing_cluster['id']
+                for c_id, info in cluster_counts.items():
+                    if info['count'] > max_count:
+                        max_count = info['count']
+                        nearest_cluster_id = c_id
+                        nearest_cluster_name = info['name']
+                
+                if nearest_cluster_id:
+                    print(f"DEBUG: Found nearby cluster: {nearest_cluster_name}")
+                    # Only assign to nearby cluster if we have section information matching
+                    # or if the location is very close (within 100m)
+                    nearby_matches = False
                     
-                    # Verify the cluster exists
-                    verification = execute_read("SELECT id, name FROM clusters WHERE id = ?", 
-                                               (cluster_id,), one=True)
-                    if verification:
-                        print(f"DEBUG: Verified cluster exists: {verification['name']}")
+                    if section:
+                        # Check if the nearby cluster has the same section
+                        if section.lower() in nearest_cluster_name.lower():
+                            nearby_matches = True
                     else:
-                        print(f"ERROR: Cluster {cluster_id} not found in database!")
-                    
-                    # Assign location to this cluster
-                    execute_write(
-                        "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                        (location_id, cluster_id)
-                    )
-                    
-                    return location_id, cluster_id, False
-            
-            print(f"DEBUG: Strategy 1 failed, trying strategy 2")
-            # 2. SECOND CLUSTERING STRATEGY: Development pattern matching
-            development_pattern = self._extract_development_pattern(street, neighborhood)
-            
-            if development_pattern:
-                print(f"DEBUG: Extracted development pattern: {development_pattern}")
-                
-                # Look for clusters with the same development pattern
-                query = """
-                    SELECT c.id, c.name
-                    FROM clusters c
-                    WHERE c.name LIKE ?
-                    ORDER BY c.id DESC
-                    LIMIT 5
-                """
-                
-                existing_clusters = execute_read(query, (f"{development_pattern}%",))
-                
-                if existing_clusters:
-                    print(f"DEBUG: Found {len(existing_clusters)} clusters with matching development pattern")
-                    
-                    # Check each cluster to see if streets match without last character
-                    for cluster in existing_clusters:
-                        # Get streets in this cluster
-                        cluster_streets = execute_read(
+                        # Check if very close (within 100m)
+                        very_close = execute_read(
                             """
-                            SELECT l.street 
+                            SELECT COUNT(*) as count
                             FROM locations l
                             JOIN location_clusters lc ON l.id = lc.location_id
-                            WHERE lc.cluster_id = ? AND l.street != ''
+                            WHERE lc.cluster_id = ? AND
+                            (l.lat BETWEEN ? AND ?) AND 
+                            (l.lon BETWEEN ?)
                             """,
-                            (cluster['id'],)
+                            (
+                                nearest_cluster_id,
+                                lat - 0.001, lat + 0.001,  # About 100m radius
+                                lon - 0.001, lon + 0.001
+                            ),
+                            one=True
                         )
                         
-                        for cluster_street in cluster_streets:
-                            cluster_street_val = cluster_street['street'].lower()
-                            
-                            # Check if streets match without last character
-                            normalized_street = self._normalize_street_for_clustering(street)
-                            normalized_cluster_street = self._normalize_street_for_clustering(cluster_street_val)
-                            
-                            if normalized_street and normalized_street == normalized_cluster_street:
-                                print(f"DEBUG: Normalized street match: '{normalized_street}' with '{normalized_cluster_street}'")
-                                
-                                # Assign to this cluster
-                                cluster_id = cluster['id']
-                                execute_write(
-                                    "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                                    (location_id, cluster_id)
-                                )
-                                
-                                return location_id, cluster_id, False
-            
-            print(f"DEBUG: Strategy 2 failed, trying strategy 3")
-            # 3. THIRD CLUSTERING STRATEGY: Neighborhood matching
-            if neighborhood:
-                print(f"DEBUG: Checking neighborhood matching for: {neighborhood}")
-                
-                # Look for clusters with the same neighborhood
-                query = """
-                    SELECT DISTINCT c.id, c.name
-                    FROM clusters c
-                    JOIN location_clusters lc ON c.id = lc.cluster_id
-                    JOIN locations l ON lc.location_id = l.id
-                    WHERE l.neighborhood = ?
-                    ORDER BY c.id DESC
-                    LIMIT 1
-                """
-                
-                existing_cluster = execute_read(query, (neighborhood,), one=True)
-                
-                if existing_cluster:
-                    print(f"DEBUG: Found cluster with matching neighborhood: {existing_cluster['name']}")
-                    cluster_id = existing_cluster['id']
+                        if very_close and very_close['count'] > 0:
+                            nearby_matches = True
                     
-                    # Assign location to this cluster
-                    execute_write(
-                        "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                        (location_id, cluster_id)
-                    )
-                    
-                    return location_id, cluster_id, False
-            
-            print(f"DEBUG: Strategy 3 failed, trying strategy 4")
-            # 4. FINAL STRATEGY: Proximity-based clustering
-            # Only try this if we have at least a development pattern or section
-            if development_pattern or section:
-                print(f"DEBUG: Attempting proximity-based clustering")
-                
-                # Get all locations within a small radius (400m)
-                nearby_locations = execute_read(
-                    """
-                    SELECT l.id, l.street, lc.cluster_id
-                    FROM locations l
-                    LEFT JOIN location_clusters lc ON l.id = lc.location_id
-                    WHERE (
-                        (l.lat BETWEEN ? AND ?) AND 
-                        (l.lon BETWEEN ? AND ?) AND
-                        l.id != ?
-                    )
-                    """,
-                    (
-                        lat - 0.004, lat + 0.004,  # Approx 400m
-                        lon - 0.004, lon + 0.004,
-                        location_id
-                    )
-                )
-                
-                if nearby_locations:
-                    # Group nearby locations by their cluster
-                    proximity_clusters = {}
-                    for loc in nearby_locations:
-                        if loc['cluster_id']:
-                            if loc['cluster_id'] not in proximity_clusters:
-                                proximity_clusters[loc['cluster_id']] = 0
-                            proximity_clusters[loc['cluster_id']] += 1
-                    
-                    if proximity_clusters:
-                        # Find the most common cluster in the proximity
-                        max_count = 0
-                        nearest_cluster_id = None
-                        
-                        for c_id, count in proximity_clusters.items():
-                            if count > max_count:
-                                max_count = count
-                                nearest_cluster_id = c_id
-                        
-                        if nearest_cluster_id:
-                            # Get cluster name for logging
-                            cluster_name = execute_read(
-                                "SELECT name FROM clusters WHERE id = ?",
-                                (nearest_cluster_id,),
-                                one=True
-                            )
-                            
-                            print(f"DEBUG: Assigning to proximity cluster: {cluster_name['name']}")
-                            
-                            # Assign to this proximity cluster
-                            cluster_id = nearest_cluster_id
-                            execute_write(
-                                "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                                (location_id, cluster_id)
-                            )
-                            
-                            return location_id, cluster_id, False
-            
-            print(f"DEBUG: Strategy 4 failed, creating new cluster")
-            # 5. CREATE NEW CLUSTER
-            # If we got here, we need to create a new cluster
-            print(f"DEBUG: Creating new cluster for location {location_id}")
-            
+                    if nearby_matches:
+                        cluster_id = nearest_cluster_id
+                        # Assign to this cluster
+                        execute_write(
+                            "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
+                            (location_id, cluster_id)
+                        )
+                        return location_id, cluster_id, False
+
+            print(f"DEBUG: No matching cluster found, creating new cluster")
+            # If we get here, create a new cluster
             # Determine the best name for the new cluster
-            cluster_name = ""
-            
             if section and subsection:
-                # Create name based on development and section
+                # Create name based on development pattern and section
                 if development_pattern:
-                    cluster_name = f"{development_pattern} {section}/{subsection}"
+                    if block:
+                        cluster_name = f"{development_pattern} {block} {section}/{subsection}"
+                    else:
+                        cluster_name = f"{development_pattern} {section}/{subsection}"
                 else:
                     cluster_name = f"{section}/{subsection}"
             elif development_pattern:
-                # Just use development pattern
-                cluster_name = development_pattern
+                # Just use the development name
+                if block:
+                    cluster_name = f"{development_pattern} {block}"
+                else:
+                    cluster_name = development_pattern
             elif neighborhood:
                 # Fall back to neighborhood
-                cluster_name = neighborhood
+                cluster_name = neighborhood.title()
             else:
                 # Last resort - use street name
                 cluster_name = street.title()
-            
-            print(f"DEBUG: New cluster name: {cluster_name}")
-            
-            # Insert new cluster with only required columns
+
+            print(f"DEBUG: Creating new cluster: {cluster_name}")
+
+            # Insert new cluster
             try:
                 cluster_id = execute_write(
                     """
@@ -481,23 +404,18 @@ class GeoDBSCAN:
                 )
             except Exception as e:
                 print(f"Error creating cluster: {str(e)}")
-                return location_id, None, False  # Fail cleanly if we can't create cluster
-            
+                return location_id, None, False
+
             # Assign location to the new cluster
             execute_write(
                 "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
                 (location_id, cluster_id)
             )
-            
+
             is_new_cluster = True
-            
-            print(f"DEBUG: ===== CLUSTERING RESULT: {cluster_id} (new: {is_new_cluster}) =====")
-            
-            if cluster_id is not None:
-                return location_id, cluster_id, is_new_cluster
-            else:
-                print("DEBUG: No clustering strategy succeeded, returning without cluster")
-                return location_id, None, False
+            print(f"DEBUG: Created new cluster with ID {cluster_id}: {cluster_name}")
+
+            return location_id, cluster_id, is_new_cluster
             
         except Exception as e:
             import traceback
@@ -527,6 +445,50 @@ class GeoDBSCAN:
         
         # No modification needed
         return street
+
+    def _normalize_street_name(self, street):
+        """
+        Normalize a street name for comparison by:
+        1. Converting to lowercase
+        2. Removing common prefixes (Jalan, Jln, etc)
+        3. Removing multiple spaces and trailing letters
+        4. Standardizing separators
+
+        Args:
+            street (str): Street name to normalize
+
+        Returns:
+            str: Normalized street name
+        """
+        if not street:
+            return ""
+            
+        # Convert to lowercase and trim
+        s = street.lower().strip()
+        
+        # Remove common prefixes
+        prefixes = ['jalan ', 'jln ', 'lorong ', 'persiaran ', 'jln. ', 'jalan. ']
+        for prefix in prefixes:
+            if s.startswith(prefix):
+                s = s[len(prefix):].strip()
+                break
+        
+        # Normalize section/subsection format (u13/12, u13-12, u13 12, etc)
+        s = re.sub(r'([a-z]+\d+)[\s/\\-]+(\d+[a-z]?)', r'\1/\2', s, flags=re.IGNORECASE)
+        
+        # Remove single letters surrounded by spaces (like "a" in "setia a utama")
+        s = re.sub(r'\s+([a-z])\s+', ' ', s, flags=re.IGNORECASE)
+        
+        # Remove trailing single letters
+        s = re.sub(r'\s+[a-z]$', '', s, flags=re.IGNORECASE)
+        
+        # Remove leading single letters
+        s = re.sub(r'^[a-z]\s+', '', s, flags=re.IGNORECASE)
+        
+        # Normalize whitespace
+        s = re.sub(r'\s+', ' ', s).strip()
+        
+        return s
 
     def _streets_have_similarity(self, street1, street2):
         """
@@ -567,6 +529,52 @@ class GeoDBSCAN:
             return True
         
         return False
+
+    def _compare_street_paths(self, street1, street2):
+        """
+        Compare full street paths for clustering.
+        
+        Args:
+            street1 (str): First street name
+            street2 (str): Second street name
+            
+        Returns:
+            bool: True if streets match closely enough for clustering
+        """
+        if not street1 or not street2:
+            return False
+        
+        # Normalize strings - lowercase and remove extra whitespace
+        s1 = self._normalize_street_name(street1)
+        s2 = self._normalize_street_name(street2)
+        
+        # Handle exact matches (after normalization)
+        if s1 == s2:
+            print(f"DEBUG: Exact match for '{s1}' and '{s2}'")
+            return True
+        
+        # Extract street name, section and subsection
+        street1_info = self._extract_street_parts(s1)
+        street2_info = self._extract_street_parts(s2)
+        
+        # No match if development names don't match
+        if street1_info['development'] != street2_info['development']:
+            print(f"DEBUG: Development names don't match: '{street1_info['development']}' vs '{street2_info['development']}'")
+            return False
+        
+        # Must have exact section match (e.g., U13)
+        if street1_info['section'] != street2_info['section']:
+            print(f"DEBUG: Sections don't match: '{street1_info['section']}' vs '{street2_info['section']}'")
+            return False
+        
+        # Must have exact subsection match (e.g., 21)
+        # This fixes the U13/12 vs U13/13 issue
+        if street1_info['subsection'] != street2_info['subsection']:
+            print(f"DEBUG: Subsections don't match: '{street1_info['subsection']}' vs '{street2_info['subsection']}'")
+            return False
+            
+        print(f"DEBUG: Streets match: '{street1}' and '{street2}'")
+        return True
 
     def _extract_section_identifier(self, street):
         """
@@ -620,27 +628,39 @@ class GeoDBSCAN:
                 street = street[len(prefix):]
                 break
         
-        # First try to match development name followed by section
-        # Modified pattern to exclude single letters before section
-        section_match = re.search(r'(.+?)(?:\s+[A-Z])?\s+([A-Z]+\d+/\d+[A-Z]?)', street, re.IGNORECASE)
+        # Check for the pattern with a block letter before section
+        # Example: "Setia Perdana D U13/27"
+        block_letter_pattern = r'(.+?)\s+([A-Z])\s+([A-Z]+\d+/\d+[A-Z]?)'
+        block_match = re.search(block_letter_pattern, street, re.IGNORECASE)
+        
+        if block_match:
+            base_name = block_match.group(1).strip()
+            block_letter = block_match.group(2).upper()
+            section_id = block_match.group(3)
+            
+            # Include the block letter in the development pattern
+            return f"{base_name} {block_letter}".title()
+        
+        # Standard pattern without block letter
+        section_match = re.search(r'(.+?)\s+(?:[A-Z]+\d+/\d+[A-Z]?)', street, re.IGNORECASE)
         if section_match:
             development_name = section_match.group(1).strip()
-            # Remove any trailing single letters
+            # Clean development name but keep block letters that are meant to be there
+            development_name = re.sub(r'\s+([A-Z])\s+([A-Z])', r' \1 \2', development_name, flags=re.IGNORECASE)
             development_name = re.sub(r'\s+[A-Z]$', '', development_name, flags=re.IGNORECASE)
             return development_name.title()
         
-        # Try alternative patterns for cases where the format varies
-        alt_match = re.search(r'(.+?)(?:\s+[A-Z])?\s+([A-Z]+\d+)', street, re.IGNORECASE)
+        # Alternative pattern for section only
+        alt_match = re.search(r'(.+?)\s+(?:[A-Z]+\d+)', street, re.IGNORECASE)
         if alt_match:
             development_name = alt_match.group(1).strip()
-            # Remove any trailing single letters
+            # Clean but preserve intentional block letters
+            development_name = re.sub(r'\s+([A-Z])\s+([A-Z])', r' \1 \2', development_name, flags=re.IGNORECASE)
             development_name = re.sub(r'\s+[A-Z]$', '', development_name, flags=re.IGNORECASE)
             return development_name.title()
         
-        # If no section identifiers, just use the whole name
-        # Remove any trailing single letters
-        street = re.sub(r'\s+[A-Z]$', '', street.strip(), flags=re.IGNORECASE)
-        return street.title()
+        # If no section identifiers, use the whole name
+        return street.strip().title()
 
     def _format_street_with_section(self, street, section, subsection):
         """
@@ -666,6 +686,68 @@ class GeoDBSCAN:
             return f"{clean_street} {section}/{subsection}"
         else:
             return f"Jalan {section}/{subsection}"
+
+    def _cleanup_geocoded_address(self, address):
+        """
+        Clean up address components, especially removing stray letters in street names
+        
+        Args:
+            address (dict): Address dictionary from geocoding
+            
+        Returns:
+            dict: Cleaned address dictionary
+        """
+        if not address:
+            return address
+        
+        # Clean up street name
+        street = address.get('street', '')
+        if street:
+            # First, handle the specific patterns we're seeing
+            # 1. Remove isolated single letters surrounded by spaces
+            clean_street = re.sub(r'\s+[A-Z]\s+', ' ', street, flags=re.IGNORECASE)
+            
+            # 2. Remove trailing single letters
+            clean_street = re.sub(r'\s+[A-Z]$', '', clean_street, flags=re.IGNORECASE)
+            
+            # 3. Remove leading single letters
+            clean_street = re.sub(r'^\s*[A-Z]\s+', '', clean_street, flags=re.IGNORECASE)
+            
+            # 4. Special case: Handle development names with specific block patterns
+            # But keep letters that are part of section/subsection format
+            section_pattern = r'([A-Z]+\d+)/(\d+[A-Z]?)'
+            section_match = re.search(section_pattern, clean_street, re.IGNORECASE)
+            
+            if section_match:
+                # Split the string at the section pattern
+                parts = re.split(section_pattern, clean_street, maxsplit=1, flags=re.IGNORECASE)
+                if len(parts) >= 4:  # [prefix, section, subsection, suffix]
+                    # Clean the prefix (development name)
+                    prefix = parts[0].strip()
+                    prefix = re.sub(r'\s+[A-Z](?=\s|$)', '', prefix, flags=re.IGNORECASE)
+                    
+                    # Preserve the section/subsection exactly as is
+                    section = parts[1]
+                    subsection = parts[2]
+                    
+                    # Clean any suffix
+                    suffix = parts[3].strip() if len(parts) > 3 else ''
+                    suffix = re.sub(r'^\s*[A-Z]\s+', '', suffix, flags=re.IGNORECASE)
+                    
+                    # Reassemble
+                    clean_street = f"{prefix} {section}/{subsection}"
+                    if suffix:
+                        clean_street = f"{clean_street} {suffix}"
+            
+            # 5. Ensure proper spacing
+            clean_street = re.sub(r'\s+', ' ', clean_street).strip()
+            
+            # Debug to trace the cleaning
+            if clean_street != street:
+                print(f"DEBUG: Cleaned street name from '{street}' to '{clean_street}'")
+                address['street'] = clean_street
+        
+        return address
 
     def resolve_address(self, lat, lon, user_provided_address=None):
         """
@@ -890,3 +972,115 @@ class GeoDBSCAN:
             'needs_user_input': True,
             'suggested_values': suggested_values
         }
+
+    def debug_extraction(self, street):
+        """
+        Debug helper for street pattern extraction
+        
+        Args:
+            street (str): Street name to debug
+        """
+        print(f"\n=== DEBUGGING STREET: '{street}' ===")
+        
+        # Test development pattern extraction
+        dev = self._extract_development_pattern(street, '')
+        print(f"Development pattern: '{dev}'")
+        
+        # Test section extraction
+        sec, subsec = self._extract_section_identifier(street)
+        print(f"Section: '{sec}', Subsection: '{subsec}'")
+        
+        # Test cleanup
+        address = {'street': street}
+        cleaned = self._cleanup_geocoded_address(address)
+        print(f"Cleaned street: '{cleaned['street']}'")
+        
+        # Test address formatting
+        if sec and subsec:
+            formatted = self._format_street_with_section(street, sec, subsec)
+            print(f"Formatted street: '{formatted}'")
+        
+        print("===================================\n")
+
+    def _extract_street_parts(self, street):
+        """
+        Extract street components in a more reliable way.
+        
+        Args:
+            street (str): Normalized street name
+            
+        Returns:
+            dict: Dictionary with 'development', 'section', 'subsection', and 'block'
+        """
+        result = {
+            'development': '',
+            'section': '',
+            'subsection': '',
+            'block': ''
+        }
+        
+        # First check for block letter pattern (e.g., "setia perdana d u13/27")
+        block_pattern = r'(.+?)\s+([a-z])\s+([a-z]+\d+)/(\d+[a-z]?)$'
+        match = re.search(block_pattern, street, re.IGNORECASE)
+        
+        if match:
+            result['development'] = match.group(1).strip()
+            result['block'] = match.group(2).upper()
+            result['section'] = match.group(3).upper()
+            result['subsection'] = match.group(4)
+            return result
+        
+        # Then check for standard pattern (e.g., "setia indah u13/12")
+        section_pattern = r'(.+?)\s+([a-z]+\d+)/(\d+[a-z]?)$'
+        match = re.search(section_pattern, street, re.IGNORECASE)
+        
+        if match:
+            result['development'] = match.group(1).strip()
+            result['section'] = match.group(2).upper()
+            result['subsection'] = match.group(3)
+            return result
+        
+        # Try alternate format without subsection
+        alt_pattern = r'(.+?)\s+([a-z]+\d+)$'
+        match = re.search(alt_pattern, street, re.IGNORECASE)
+        
+        if match:
+            result['development'] = match.group(1).strip()
+            result['section'] = match.group(2).upper()
+            return result
+        
+        # If no pattern matches, just use the whole string as development name
+        result['development'] = street.strip()
+        return result
+
+    def clean_existing_locations(self):
+        """
+        Clean up any existing locations in the database to fix stray letters
+        """
+        print("DEBUG: Starting cleanup of existing location street names")
+        
+        # Get all locations with street names
+        locations = execute_read(
+            "SELECT id, street FROM locations WHERE street IS NOT NULL AND street != ''"
+        )
+        
+        updated = 0
+        for loc in locations:
+            location_id = loc['id']
+            original_street = loc['street']
+            
+            # Apply the same cleanup
+            cleaned = self._cleanup_geocoded_address({'street': original_street})
+            clean_street = cleaned['street']
+            
+            if clean_street != original_street:
+                # Update the database
+                execute_write(
+                    "UPDATE locations SET street = ? WHERE id = ?",
+                    (clean_street, location_id)
+                )
+                updated += 1
+                print(f"DEBUG: Updated location {location_id}: '{original_street}' → '{clean_street}'")
+        
+        print(f"DEBUG: Cleaned {updated} location street names in database")
+        return updated
