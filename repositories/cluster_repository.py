@@ -67,10 +67,10 @@ class ClusterRepository:
     def get_cluster_locations(cluster_id):
         """Get all locations in a cluster"""
         return execute_read(
-            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city
-               FROM locations l
-               JOIN location_clusters lc ON l.id = lc.location_id
-               WHERE lc.cluster_id = ?""",
+            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city
+            FROM locations l
+            JOIN location_clusters lc ON l.id = lc.location_id
+            WHERE lc.cluster_id = ?""",
             (cluster_id,)
         )
     

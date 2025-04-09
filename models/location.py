@@ -13,7 +13,7 @@ class Location(db.Model):
     lon = db.Column(db.Float, nullable=False)
     street = db.Column(db.String)
     neighborhood = db.Column(db.String)
-    town = db.Column(db.String)
+    development = db.Column(db.String)
     city = db.Column(db.String)
     postcode = db.Column(db.String)
     country = db.Column(db.String)

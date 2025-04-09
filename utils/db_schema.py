@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS locations (
     lon REAL NOT NULL,
     street TEXT,
     neighborhood TEXT,
-    town TEXT, 
+    development TEXT, 
     city TEXT,
     postcode TEXT,
     country TEXT,

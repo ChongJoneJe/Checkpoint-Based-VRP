@@ -85,11 +85,13 @@ function handleMapClick(e) {
  * Verify location address
  */
 function verifyLocation(lat, lng, locationType) {
+    showNotification('Verifying location...', 'info');
+    
     return fetch(`/locations/verify_location?lat=${lat}&lng=${lng}`)
         .then(response => response.json())
         .then(data => {
             if (data.needs_user_input) {
-                // Show the address modal
+                // Show the address modal when reverse geocoding failed
                 return showAddressModal(lat, lng, locationType, data.suggested_values);
             } else {
                 // No need for user input, return the address
@@ -99,7 +101,8 @@ function verifyLocation(lat, lng, locationType) {
         .catch(error => {
             console.error('Error verifying location:', error);
             showNotification('Error verifying location address', 'error');
-            return Promise.reject(error);
+            // Show address form even in case of error
+            return showAddressModal(lat, lng, locationType, {});
         });
 }
 
@@ -115,20 +118,18 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
         document.getElementById('address-lng').value = lng;
         document.getElementById('address-type').value = locationType;
         
-        // Fill in suggested values
+        // Fill in suggested values - only neighborhood, city and postcode
         if (suggestedValues) {
-            document.getElementById('address-section').value = suggestedValues.section || '';
-            document.getElementById('address-subsection').value = suggestedValues.subsection || '';
-            document.getElementById('address-neighborhood').value = suggestedValues.neighborhood || '';
-            document.getElementById('address-city').value = suggestedValues.city || '';
-            document.getElementById('address-postcode').value = suggestedValues.postcode || '';
+            if (suggestedValues.neighborhood) document.getElementById('address-neighborhood').value = suggestedValues.neighborhood;
+            if (suggestedValues.city) document.getElementById('address-city').value = suggestedValues.city;
+            if (suggestedValues.postcode) document.getElementById('address-postcode').value = suggestedValues.postcode;
         }
         
         // Show the modal
         modal.style.display = 'block';
         
         // Create a mini map showing the selected location
-        const previewMap = L.map('modal-map-preview').setView([lat, lng], 17);
+        const previewMap = L.map('mini-map').setView([lat, lng], 17);
         
         // Add base tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -147,28 +148,14 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
         document.getElementById('address-street').focus();
         
         // Handle form submission
-        document.getElementById('address-form').addEventListener('submit', function(e) {
+        document.getElementById('address-form').onsubmit = function(e) {
             e.preventDefault();
             
-            // Get form values
+            // Get form values - just use the street as entered (no section/subsection formatting)
             let street = document.getElementById('address-street').value.trim();
-            let section = document.getElementById('address-section').value.trim().toUpperCase();
-            let subsection = document.getElementById('address-subsection').value.trim();
             let neighborhood = document.getElementById('address-neighborhood').value.trim();
             let city = document.getElementById('address-city').value.trim();
             let postcode = document.getElementById('address-postcode').value.trim();
-            
-            // Format street name consistently with backend logic
-            if (section && subsection) {
-                const sectionPattern = new RegExp(`${section}[\\s/\\\\-]*${subsection}`, 'i');
-                if (street && !sectionPattern.test(street)) {
-                    // If street doesn't already include section/subsection, add it
-                    street = `${street} ${section}/${subsection}`;
-                } else if (!street) {
-                    // If no street name provided, create one
-                    street = `Jalan ${section}/${subsection}`;
-                }
-            }
             
             const addressData = {
                 lat: document.getElementById('address-lat').value,
@@ -179,6 +166,15 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                 postcode: postcode,
                 country: 'Malaysia'
             };
+            
+            // If warehouse exists, add it to the data for proper clustering
+            if (warehouseMarker) {
+                const warehouseLatLng = warehouseMarker.getLatLng();
+                addressData.warehouse_location = [warehouseLatLng.lat, warehouseLatLng.lng];
+            }
+            
+            // Close the modal
+            modal.style.display = 'none';
             
             // Submit to server
             fetch('/locations/save_address', {
@@ -191,27 +187,43 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    document.getElementById('address-form-container').style.display = 'none';
-                    showNotification(`Address saved successfully to cluster: ${data.cluster_name}`, 'success');
+                    showNotification(`Address saved successfully${data.cluster_name ? ` to cluster: ${data.cluster_name}` : ''}`, 'success');
                     
-                    // Update map markers if needed
-                    updateMarker(parseFloat(addressData.lat), parseFloat(addressData.lng), 
-                                data.address.street || 'Unknown location');
+                    // Create a complete address object to resolve the promise
+                    const addressObject = {
+                        street: street,
+                        neighborhood: neighborhood,
+                        city: city,
+                        postcode: postcode,
+                        country: 'Malaysia'
+                    };
+                    
+                    // Cleanup
+                    previewMap.remove();
+                    resetAddressForm();
+                    
+                    // Resolve with the full address object
+                    resolve(addressObject);
                 } else {
                     showNotification('Error: ' + data.message, 'error');
+                    previewMap.remove();
+                    resetAddressForm();
+                    reject(new Error(data.message));
                 }
             })
             .catch(error => {
                 console.error('Error:', error);
                 showNotification('Error saving address: ' + error, 'error');
+                previewMap.remove();
+                resetAddressForm();
+                reject(error);
             });
-        });
+        };
         
         // Handle cancel button
-        document.getElementById('cancel-address').onclick = function() {
+        document.getElementById('cancel-address-btn').onclick = function() {
             modal.style.display = 'none';
             resetAddressForm();
-            // Clean up the map
             previewMap.remove();
             reject(new Error('Address input canceled'));
         };
@@ -220,7 +232,6 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
         document.querySelector('.close-modal').onclick = function() {
             modal.style.display = 'none';
             resetAddressForm();
-            // Clean up the map
             previewMap.remove();
             reject(new Error('Address input canceled'));
         };

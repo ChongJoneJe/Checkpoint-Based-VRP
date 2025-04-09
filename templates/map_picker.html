@@ -76,69 +76,6 @@
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"></script>
 
-    <div id="address-modal" class="modal">
-        <div class="modal-content">
-            <span class="close-modal">&times;</span>
-            <div class="modal-header">
-                <h2>Location Address</h2>
-                <p>Please provide address information for the selected location:</p>
-            </div>
-            
-            <div class="modal-body">
-                <div class="modal-map-preview" id="modal-map-preview"></div>
-                
-                <form id="address-form">
-                    <input type="hidden" id="address-lat">
-                    <input type="hidden" id="address-lng">
-                    <input type="hidden" id="address-type">
-                    
-                    <div class="form-row">
-                        <div class="form-group full-width">
-                            <label for="address-street">Street Name*:</label>
-                            <input type="text" id="address-street" required>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group half-width">
-                            <label for="address-section">Section:</label>
-                            <input type="text" id="address-section" placeholder="e.g. U13">
-                        </div>
-                        
-                        <div class="form-group half-width">
-                            <label for="address-subsection">Subsection:</label>
-                            <input type="text" id="address-subsection" placeholder="e.g. 22">
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group half-width">
-                            <label for="address-neighborhood">Neighborhood:</label>
-                            <input type="text" id="address-neighborhood">
-                        </div>
-                        
-                        <div class="form-group half-width">
-                            <label for="address-city">City:</label>
-                            <input type="text" id="address-city">
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <div class="form-group half-width">
-                            <label for="address-postcode">Postcode:</label>
-                            <input type="text" id="address-postcode">
-                        </div>
-                    </div>
-                    
-                    <div class="modal-buttons">
-                        <button type="submit" class="btn btn-success">Save Address</button>
-                        <button type="button" class="btn btn-secondary" id="cancel-address">Cancel</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <style>
     .modal {
         display: none;
@@ -279,5 +216,50 @@
         }
     });
     </script>
+
+    <!-- Address input modal -->
+    <div id="address-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Enter Location Address</h2>
+            
+            <div class="modal-map-container">
+                <div id="mini-map" style="height: 200px; width: 100%; margin-bottom: 15px;"></div>
+            </div>
+            
+            <form id="address-form">
+                <input type="hidden" id="address-lat" name="lat">
+                <input type="hidden" id="address-lng" name="lng">
+                <input type="hidden" id="address-type" name="type">
+                
+                <div class="form-group">
+                    <label for="address-street">Street Name:</label>
+                    <input type="text" id="address-street" name="street" placeholder="e.g., Jalan Setia Nusantara U13/22T" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="address-neighborhood">Neighborhood:</label>
+                    <input type="text" id="address-neighborhood" name="neighborhood" placeholder="e.g., Setia Alam">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="address-city">City:</label>
+                        <input type="text" id="address-city" name="city" placeholder="e.g., Shah Alam">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="address-postcode">Postcode:</label>
+                        <input type="text" id="address-postcode" name="postcode" placeholder="e.g., 40170">
+                    </div>
+                </div>
+                
+                <div class="form-buttons">
+                    <button type="submit" class="btn btn-primary">Save Address</button>
+                    <button type="button" id="cancel-address-btn" class="btn btn-secondary">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>

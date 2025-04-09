@@ -7,7 +7,7 @@ class LocationRepository:
     def find_by_coordinates(lat, lon, tolerance=0.0001):
         """Find location by coordinates with tolerance and return full address"""
         row = execute_read(
-            """SELECT id, lat, lon, street, neighborhood, town, city, postcode, country
+            """SELECT id, lat, lon, street, neighborhood, development, city, postcode, country
             FROM locations
             WHERE ABS(lat - ?) < ? AND ABS(lon - ?) < ?""",
             (lat, tolerance, lon, tolerance),
@@ -24,13 +24,13 @@ class LocationRepository:
         """Insert a new location with address data"""
         return execute_write(
             """INSERT INTO locations 
-               (lat, lon, street, neighborhood, town, city, postcode, country)
+               (lat, lon, street, neighborhood, development, city, postcode, country)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 lat, lon, 
                 address_data.get('street', ''),
                 address_data.get('neighborhood', ''),
-                address_data.get('town', ''),
+                address_data.get('development', ''),  
                 address_data.get('city', ''),
                 address_data.get('postcode', ''),
                 address_data.get('country', '')
@@ -40,25 +40,31 @@ class LocationRepository:
     @staticmethod
     def update_address(location_id, address_data):
         """Update address data for existing location"""
-        return execute_write(
-            """UPDATE locations SET 
-               street = COALESCE(street, ?),
-               neighborhood = COALESCE(neighborhood, ?),
-               town = COALESCE(town, ?),
-               city = COALESCE(city, ?),
-               postcode = COALESCE(postcode, ?),
-               country = COALESCE(country, ?)
-               WHERE id = ?""",
-            (
-                address_data.get('street', ''),
-                address_data.get('neighborhood', ''),
-                address_data.get('town', ''),
-                address_data.get('city', ''),
-                address_data.get('postcode', ''),
-                address_data.get('country', ''),
-                location_id
+        try:
+            # Ensure we have the right number of parameters - there were 7 placeholders but only 6 values
+            return execute_write(
+                """UPDATE locations SET 
+                   street = COALESCE(?, street),
+                   neighborhood = COALESCE(?, neighborhood),
+                   development = COALESCE(?, development),
+                   city = COALESCE(?, city),
+                   postcode = COALESCE(?, postcode),
+                   country = COALESCE(?, country)
+                   WHERE id = ?""",
+                (
+                    address_data.get('street', ''),
+                    address_data.get('neighborhood', ''),
+                    address_data.get('development', ''),
+                    address_data.get('city', ''),
+                    address_data.get('postcode', ''),
+                    address_data.get('country', ''),
+                    location_id
+                )
             )
-        )
+        except Exception as e:
+            print(f"ERROR in update_address: {str(e)}")
+            # Return -1 to indicate failure
+            return -1
     
     @staticmethod
     def find_matching_street(street, exclude_location_id=None):
@@ -100,7 +106,7 @@ class LocationRepository:
     def get_locations_by_cluster(cluster_id):
         """Get all locations in a specific cluster"""
         return execute_read(
-            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city, l.postcode, l.country
+            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city, l.postcode, l.country
                FROM locations l
                JOIN location_clusters lc ON l.id = lc.location_id
                WHERE lc.cluster_id = ?""",
@@ -111,7 +117,7 @@ class LocationRepository:
     def get_all_locations():
         """Get all locations in the database"""
         return execute_read(
-            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city, l.postcode, l.country,
+            """SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city, l.postcode, l.country,
                      lc.cluster_id
                FROM locations l
                LEFT JOIN location_clusters lc ON l.id = lc.location_id"""

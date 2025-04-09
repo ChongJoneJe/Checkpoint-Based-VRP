@@ -70,9 +70,18 @@ class LocationService:
             wh_lat, wh_lon = warehouse
             wh_address = geocoder.geocode_location(wh_lat, wh_lon)
             
+            # Extract development pattern
+            development = geocoder._extract_development_pattern(
+                wh_address.get('street', ''), 
+                wh_address.get('neighborhood', '')
+            )
+            
+            # Add development to address
+            wh_address['development'] = development.title()
+            
             # Process warehouse
             if not wh_address:
-                wh_address = {'street': '', 'neighborhood': '', 'town': '', 'city': '', 'postcode': '', 'country': ''}
+                wh_address = {'street': '', 'neighborhood': '', 'development': '', 'city': '', 'postcode': '', 'country': ''}
                 
             # Check if location already exists
             existing_loc = execute_read(
@@ -86,12 +95,12 @@ class LocationService:
                 # Update address if needed
                 execute_write(
                     """UPDATE locations SET 
-                       street = ?, neighborhood = ?, town = ?, city = ?, postcode = ?, country = ?
+                       street = ?, neighborhood = ?, development = ?, city = ?, postcode = ?, country = ?
                        WHERE id = ?""",
                     (
                         wh_address.get('street', ''),
                         wh_address.get('neighborhood', ''),
-                        wh_address.get('town', ''),
+                        wh_address.get('development', ''),
                         wh_address.get('city', ''),
                         wh_address.get('postcode', ''),
                         wh_address.get('country', ''),
@@ -101,13 +110,13 @@ class LocationService:
             else:
                 wh_loc_id = execute_write(
                     """INSERT INTO locations 
-                       (lat, lon, street, neighborhood, town, city, postcode, country)
+                       (lat, lon, street, neighborhood, development, city, postcode, country)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         wh_lat, wh_lon, 
                         wh_address.get('street', ''),
                         wh_address.get('neighborhood', ''),
-                        wh_address.get('town', ''),
+                        wh_address.get('development', ''),
                         wh_address.get('city', ''),
                         wh_address.get('postcode', ''),
                         wh_address.get('country', '')

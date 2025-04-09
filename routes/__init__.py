@@ -15,6 +15,7 @@ def setup_routes(app):
     from routes.locations import locations_bp
     from routes.clustering import clustering_bp
     from routes.vrp import vrp_bp
+    from routes.debug import debug_bp
     
     # Register blueprints with consistent URL prefixes
     app.register_blueprint(main_bp)
@@ -22,3 +23,4 @@ def setup_routes(app):
     app.register_blueprint(locations_bp, url_prefix='/locations')
     app.register_blueprint(clustering_bp, url_prefix='/clustering')
     app.register_blueprint(vrp_bp, url_prefix='/vrp')
+    app.register_blueprint(debug_bp)

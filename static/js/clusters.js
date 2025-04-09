@@ -238,10 +238,7 @@ function displayClusters(clusters) {
             const popupContent = `
                 <strong>Location ID: ${location.id}</strong><br>
                 Cluster: ${displayName}<br>
-                ${location.street ? `Street: ${location.street}<br>` : ''}
-                ${location.neighborhood ? `Neighborhood: ${location.neighborhood}<br>` : ''}
-                ${location.city ? `City: ${location.city}<br>` : ''}
-                Coordinates: ${location.lat.toFixed(5)}, ${location.lon.toFixed(5)}
+                ${displayLocationInfo(location)}
             `;
             marker.bindPopup(popupContent);
             
@@ -260,6 +257,18 @@ function displayClusters(clusters) {
     
     // At the end, add:
     displayCheckpoints(clusters);
+}
+
+// When displaying location info:
+function displayLocationInfo(location) {
+    return `
+        <div class="location-details">
+            ${location.street ? `<p>Street: ${location.street}</p>` : ''}
+            ${location.development ? `<p>Development: ${location.development}</p>` : ''}
+            ${location.neighborhood ? `<p>Neighborhood: ${location.neighborhood}</p>` : ''}
+            <p>Coordinates: ${location.lat.toFixed(5)}, ${location.lon.toFixed(5)}</p>
+        </div>
+    `;
 }
 
 // Helper function to find the most common value
@@ -398,7 +407,7 @@ function displayWarehouse(warehouse) {
             <h4>Warehouse</h4>
             ${warehouse.street ? `<p>Street: ${warehouse.street}</p>` : ''}
             ${warehouse.neighborhood ? `<p>Neighborhood: ${warehouse.neighborhood}</p>` : ''}
-            ${warehouse.town ? `<p>Town: ${warehouse.town}</p>` : ''}
+            ${warehouse.development ? `<p>Development: ${warehouse.development}</p>` : ''}
             ${warehouse.city ? `<p>City: ${warehouse.city}</p>` : ''}
             <p>Coordinates: ${warehouse.lat.toFixed(5)}, ${warehouse.lon.toFixed(5)}</p>
         </div>
@@ -444,6 +453,46 @@ function clearClusterMarkers() {
         map.removeLayer(warehouseMarker);
         warehouseMarker = null;
     }
+}
+
+// When grouping locations by development:
+function groupLocationsByDevelopment(locations) {
+    const groups = {};
+    
+    locations.forEach(loc => {
+        const dev = loc.development || 'Unknown';
+        if (!groups[dev]) {
+            groups[dev] = [];
+        }
+        groups[dev].push(loc);
+    });
+    
+    return groups;
+}
+
+// When displaying grouped data:
+function displayClusterGroups(cluster) {
+    let html = '';
+    
+    // For each development group
+    Object.keys(cluster.development_groups).forEach(dev => {
+        const locations = cluster.development_groups[dev];
+        
+        html += `
+            <div class="development-group">
+                <h4>${dev}</h4>
+                <ul>
+                    ${locations.map(loc => `
+                        <li>
+                            ${loc.street || 'Unknown street'}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `;
+    });
+    
+    return html;
 }
 
 // Make sure to update your selectCluster function to call the checkpoints module:

@@ -25,7 +25,7 @@ class ClusteringService:
                 
                 # Get warehouse
                 warehouse_query = """
-                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city
+                    SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city
                     FROM locations l
                     JOIN preset_locations pl ON l.id = pl.location_id
                     WHERE pl.preset_id = ? AND pl.is_warehouse = 1
@@ -40,7 +40,7 @@ class ClusteringService:
                         'lon': warehouse_row['lon'],
                         'street': warehouse_row['street'] or '',
                         'neighborhood': warehouse_row['neighborhood'] or '',
-                        'town': warehouse_row['town'] or '',
+                        'development': warehouse_row['development'] or '',
                         'city': warehouse_row['city'] or ''
                     }
                 
@@ -48,7 +48,7 @@ class ClusteringService:
                 destinations_query = """
                     SELECT l.id, l.lat, l.lon, l.street, l.neighborhood,
                            lc.cluster_id, c.name as cluster_name, 
-                           c.centroid_lat, c.centroid_lon
+                           c.centroid_lat, c.centroid_lon, l.development
                     FROM locations l
                     JOIN preset_locations pl ON l.id = pl.location_id
                     LEFT JOIN location_clusters lc ON l.id = lc.location_id
@@ -67,7 +67,8 @@ class ClusteringService:
                         'lat': row['lat'],
                         'lon': row['lon'],
                         'street': row['street'] or '',
-                        'neighborhood': row['neighborhood'] or ''
+                        'neighborhood': row['neighborhood'] or '',
+                        'development': row['development'] or ''
                     }
                     
                     if row['cluster_id']:
@@ -134,7 +135,7 @@ class ClusteringService:
         else:
             # Original implementation for "All Locations" view
             query = """
-                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.town, l.city,
+                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city,
                        c.id as cluster_id, c.name as cluster_name, 
                        c.centroid_lat, c.centroid_lon,
                        pl.is_warehouse
@@ -164,7 +165,7 @@ class ClusteringService:
                         'lon': row['lon'],
                         'street': row['street'],
                         'neighborhood': row['neighborhood'],
-                        'town': row['town'],
+                        'development': row['development'],
                         'city': row['city']
                     }
                     continue
@@ -188,7 +189,8 @@ class ClusteringService:
                         'lat': row['lat'],
                         'lon': row['lon'],
                         'street': row['street'],
-                        'neighborhood': row['neighborhood']
+                        'neighborhood': row['neighborhood'],
+                        'development': row['development']
                     })
                 else:
                     # Add to noise points (no cluster)
@@ -197,7 +199,8 @@ class ClusteringService:
                         'lat': row['lat'],
                         'lon': row['lon'],
                         'street': row['street'],
-                        'neighborhood': row['neighborhood']
+                        'neighborhood': row['neighborhood'],
+                        'development': row['development']
                     })
             
             # If there are noise points, add them as a special "cluster"
@@ -325,7 +328,7 @@ class ClusteringService:
                     'lon': wh_location.lon,
                     'street': wh_location.street,
                     'neighborhood': wh_location.neighborhood,
-                    'town': wh_location.town,
+                    'development': wh_location.development,
                     'city': wh_location.city
                 }
         
@@ -343,7 +346,7 @@ class ClusteringService:
                 'lon': loc.lon,
                 'street': loc.street,
                 'neighborhood': loc.neighborhood,
-                'town': loc.town,
+                'development': loc.development,
                 'city': loc.city
             })
         
