@@ -4,92 +4,7 @@
     <title>Location Clusters</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
-    <style>
-        .container {
-            display: flex;
-            height: 100vh;
-        }
-        
-        .sidebar {
-            width: 300px;
-            padding: 20px;
-            background-color: #f8f9fa;
-            overflow-y: auto;
-        }
-        
-        #map {
-            flex-grow: 1;
-            height: 100%;
-        }
-        
-        .cluster-info {
-            margin-bottom: 15px;
-        }
-        
-        .color-sample {
-            display: inline-block;
-            width: 15px;
-            height: 15px;
-            margin-right: 5px;
-            border-radius: 50%;
-        }
-        
-        .preset-selector {
-            margin-bottom: 20px;
-        }
-        
-        .cluster-item {
-            border-bottom: 1px solid #eee;
-            padding: 8px 0;
-        }
-        
-        .cluster-details {
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
-        
-        .location-count {
-            font-weight: bold;
-            color: #666;
-        }
-        
-        .checkpoint-icon {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            border: 2px solid white;
-            box-shadow: 0 0 4px rgba(0,0,0,0.4);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .checkpoint-icon i {
-            color: white;
-            font-size: 14px;
-        }
-        
-        .checkpoint-item {
-            padding: 8px;
-            margin-bottom: 5px;
-            border-radius: 4px;
-            border: 1px solid #ddd;
-            display: flex;
-            align-items: center;
-        }
-        
-        .checkpoint-item .badge {
-            margin-left: 10px;
-        }
-        
-        .checkpoint-color-sample {
-            width: 10px;
-            height: 10px;
-            display: inline-block;
-            margin-right: 5px;
-            border-radius: 50%;
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" />
 </head>
 <body>
     <div class="container">
@@ -124,6 +39,7 @@
                 <p>Loading clusters...</p>
             </div>
 
+            <!-- Checkpoint controls - only shown when a cluster is selected -->
             <div id="checkpoint-controls" class="card mt-3 mb-3">
                 <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">Security Checkpoints</h5>
@@ -138,7 +54,7 @@
                     
                     <div class="btn-group mb-3" role="group">
                         <button id="generate-checkpoints-btn" class="btn btn-primary">
-                            <i class="fas fa-magic mr-1"></i> Auto-Generate Checkpoints
+                            <i class="fas fa-magic mr-1"></i> Auto-Generate
                         </button>
                         <button id="toggle-edit-checkpoints-btn" class="btn btn-outline-secondary">
                             <i class="fas fa-edit mr-1"></i> Edit Mode
@@ -154,28 +70,91 @@
                             <p class="text-muted">Select a cluster to view checkpoints</p>
                         </div>
                     </div>
+                    
+                    <!-- Network visualization -->
+                    <div id="network-viz" class="mt-3" style="display: none;">
+                        <h6>Network Analysis</h6>
+                        <img id="network-image" class="img-fluid" alt="Network visualization">
+                    </div>
                 </div>
             </div>
-        </div>
-        
+        </div>      
         <div id="map"></div>
     </div>
     
+    <!-- Debug panel for development -->
+    <div id="checkpoint-debug-panel"></div>
+    
+    <!-- Scripts -->
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
-    <script src="{{ url_for('static', filename='js/clusters.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/shapely@0.1.7/dist/shapely.min.js"></script>
+    
+    <!-- Load our JS files in the right order -->
+    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/clusters.js') }}"></script>
     <script src="{{ url_for('static', filename='js/checkpoints.js') }}"></script>
+    
+    <!-- Initialize everything once the DOM is ready -->
     <script>
-        document.getElementById('show-checkpoints').addEventListener('change', function() {
-            const visible = this.checked;
-            checkpointMarkers.forEach(marker => {
-                if (visible) {
-                    marker.addTo(map);
-                } else {
-                    marker.remove();
-                }
-            });
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for debug mode
+            const debugMode = {{ config.get('DEBUG', False) | tojson }};
+            if (debugMode) {
+                document.body.classList.add('debug-mode');
+            }
+            
+            Utils.debugLog("DOM ready, initializing modules");
+            
+            // Initialize clusters first
+            ClusterManager.initialize();
+            
+            // Wait a bit before accessing CheckpointManager
+            setTimeout(() => {
+                // Set up checkpoint visibility toggle
+                document.getElementById('show-checkpoints').addEventListener('change', function() {
+                    if (window.CheckpointManager) {
+                        Utils.debugLog("Toggle checkpoint visibility: " + this.checked);
+                        window.CheckpointManager.toggleVisibility(this.checked);
+                    }
+                });
+                
+                Utils.debugLog("Initialization complete");
+            }, 500);
         });
+    </script>
+    
+    <!-- Add this after your other initialization code -->
+    <script>
+        // Add after your existing DOMContentLoaded code
+        
+        // Diagnostic check after 2 seconds
+        setTimeout(() => {
+            Utils.debugLog("Running API diagnostics...");
+            Utils.checkApiEndpoints();
+            
+            // Check DOM structure
+            const checkpointList = document.querySelector('#checkpoint-list .checkpoint-items');
+            Utils.debugLog(`Checkpoint list container exists: ${!!checkpointList}`);
+            
+            // Force reload presets as a test
+            Utils.debugLog("Explicitly reloading presets...");
+            ClusterManager.loadPresets();
+            
+            // Look for any ongoing XHR errors
+            window.addEventListener('error', function(e) {
+                Utils.debugLog(`Global error caught: ${e.message}`);
+            });
+        }, 2000);
+    </script>
+    
+    <!-- Add near the end of your script section -->
+    <script>
+        // Test the checkpoint generation API directly
+        setTimeout(() => {
+            Utils.debugLog("Testing checkpoint generation API...");
+            // Change 8 to whatever cluster ID you're working with
+            Utils.testCheckpointGeneration(8);
+        }, 3000);
     </script>
 </body>
 </html>

@@ -613,15 +613,6 @@ header {
     align-items: center;
 }
 
-.checkpoint-icon {
-    background-color: #ff9900;
-    color: white;
-    border-radius: 50%;
-    text-align: center;
-    line-height: 24px;
-    font-weight: bold;
-}
-
 #loading-overlay {
     position: fixed;
     top: 0;
@@ -682,19 +673,86 @@ header {
 }
 
 .checkpoint-icon {
-    width: 24px;
-    height: 24px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     border: 2px solid white;
-    box-shadow: 0 0 4px rgba(0,0,0,0.4);
+    box-shadow: 0 0 4px rgba(0,0,0,0.5);
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
 }
 
-.checkpoint-icon i {
+.checkpoint-number {
     color: white;
+    font-weight: bold;
     font-size: 14px;
+    text-shadow: 0 0 3px black;
+}
+
+.checkpoint-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    background-color: #f8f9fa;
+    transition: background-color 0.2s ease;
+}
+
+.checkpoint-item:hover {
+    background-color: #f0f0f0;
+}
+
+.checkpoint-item.active-edit {
+    background-color: #e5f5ff;
+    border-left: 3px solid #007bff;
+}
+
+.checkpoint-color-sample {
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    margin-right: 5px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.2);
+}
+
+#checkpoint-controls {
+    margin-top: 15px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+#checkpoint-controls .card-header {
+    padding: 10px 15px;
+    background-color: #6c757d;
+}
+
+#checkpoint-controls .card-body {
+    padding: 15px;
+}
+
+#checkpoint-controls h5 {
+    margin: 0;
+    color: #fff;
+    font-size: 16px;
+}
+
+.edit-features {
+    display: none;
+}
+
+.edit-mode .edit-features {
+    display: block;
+}
+
+.checkpoint-marker {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    box-shadow: 0 0 3px rgba(0,0,0,0.5);
 }
 
 .checkpoint-item {
@@ -705,6 +763,11 @@ header {
     background-color: #f8f9fa;
     border-radius: 4px;
     border: 1px solid #dee2e6;
+}
+
+.cluster-item.active {
+    background-color: #e9f5ff;
+    border-left: 4px solid #007bff;
 }
 
 .checkpoint-color-sample {

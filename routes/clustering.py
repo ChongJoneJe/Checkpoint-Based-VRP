@@ -3,6 +3,8 @@ from services.clustering_service import ClusteringService
 from services.preset_service import PresetService
 from utils.database import execute_read, execute_write
 from algorithms.dbscan import GeoDBSCAN
+from services.debug_service import DebugService
+from services.checkpoint_service import CheckpointService
 
 # Create blueprint
 clustering_bp = Blueprint('clustering', __name__)
@@ -70,130 +72,75 @@ def get_presets_for_clustering():
         import traceback
         traceback.print_exc()
         return jsonify({"presets": [], "status": "error", "message": str(e)})
-    
+
+@clustering_bp.route('/debug_checkpoint/<int:cluster_id>', methods=['GET'])
+def debug_checkpoint(cluster_id):
+    """Debug route for testing checkpoint generation"""
+    try:
+        # Get geocoder instance
+        geocoder = current_app.config.get('geocoder')
+        if not geocoder:
+            return jsonify({
+                "status": "error",
+                "message": "Geocoder not available"
+            })
+        
+        # Use the service to get debug info
+        result = DebugService.debug_checkpoint(cluster_id, geocoder)
+        
+        return jsonify({
+            "status": "success",
+            **result
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": f"Error in debug: {str(e)}",
+            "traceback": traceback.format_exc()
+        })
+
 @clustering_bp.route('/checkpoints/<int:cluster_id>', methods=['GET'])
 def get_cluster_checkpoints(cluster_id):
-    """Get checkpoints for a cluster"""
+    """Get checkpoints for a specific cluster"""
     try:
-        # Get the cluster details
-        cluster = execute_read(
-            "SELECT id, name, centroid_lat, centroid_lon FROM clusters WHERE id = ?",
-            (cluster_id,),
-            one=True
-        )
+        print(f"DEBUG: Fetching checkpoints for cluster {cluster_id}")
+        result = CheckpointService.get_checkpoints(cluster_id)
         
-        if not cluster:
-            return jsonify({"status": "error", "message": "Cluster not found"})
-        
-        # Get all checkpoints for this cluster
-        checkpoints = execute_read(
-            """SELECT id, lat, lon, from_road_type, to_road_type, confidence, source
-               FROM security_checkpoints
-               WHERE cluster_id = ?""",
-            (cluster_id,)
-        )
-        
-        return jsonify({
+        # Convert to JSON-serializable dict and log
+        response_data = {
             "status": "success",
-            "cluster": cluster,
-            "checkpoints": checkpoints
-        })
+            **result
+        }
+        print(f"DEBUG: Response data: {response_data}")
+        
+        return jsonify(response_data)
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({
+            "status": "error",
+            "message": f"Error getting checkpoints: {str(e)}"
+        })
 
-@clustering_bp.route('/checkpoints/<int:cluster_id>', methods=['POST'])
-def update_cluster_checkpoints(cluster_id):
-    """Update or add checkpoints for a cluster"""
+@clustering_bp.route('/generate_checkpoints/<int:cluster_id>', methods=['POST'])
+def generate_cluster_checkpoints(cluster_id):
+    """Generate checkpoints for a specific cluster"""
     try:
-        data = request.json
-        checkpoints = data.get('checkpoints', [])
-        
-        # Clear existing checkpoints for this cluster
-        execute_write(
-            "DELETE FROM security_checkpoints WHERE cluster_id = ?",
-            (cluster_id,)
-        )
-        
-        # Add the new checkpoints
-        for cp in checkpoints:
-            execute_write(
-                """INSERT INTO security_checkpoints 
-                   (cluster_id, lat, lon, from_road_type, to_road_type, confidence, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    cluster_id,
-                    cp['lat'],
-                    cp['lon'],
-                    cp.get('from_type', 'unknown'),
-                    cp.get('to_type', 'residential'),
-                    cp.get('confidence', 1.0),
-                    cp.get('source', 'manual')
-                )
-            )
-        
+        geocoder = current_app.config.get('geocoder')
+        result = CheckpointService.generate_checkpoints(cluster_id, geocoder)
         return jsonify({
             "status": "success",
-            "message": f"Updated {len(checkpoints)} checkpoints for cluster {cluster_id}"
+            "message": f"Generated {result['count']} checkpoints",
+            "checkpoints": result["checkpoints"]
         })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
-
-@clustering_bp.route('/generate_checkpoints', methods=['POST'])
-def generate_checkpoints():
-    """Generate security checkpoints for clusters"""
-    try:
-        data = request.json
-        cluster_id = data.get('cluster_id')
-        
-        # Get geocoder with API key
-        from flask import current_app
-        api_key = current_app.config.get('ORS_API_KEY')
-        geocoder = GeoDBSCAN(api_key=api_key)
-        
-        # If specific cluster_id provided, generate for just that cluster
-        if cluster_id:
-            # Clear existing checkpoints
-            execute_write(
-                "DELETE FROM security_checkpoints WHERE cluster_id = ?",
-                (cluster_id,)
-            )
-            
-            # Generate new checkpoints
-            checkpoints = geocoder.identify_cluster_access_points(cluster_id)
-            
-            return jsonify({
-                "status": "success",
-                "message": f"Generated checkpoints for cluster {cluster_id}",
-                "checkpoints": checkpoints
-            })
-        else:
-            # Handle bulk generation for all clusters
-            clusters = execute_read("SELECT id FROM clusters")
-            
-            processed = 0
-            for cluster in clusters:
-                cluster_id = cluster['id']
-                
-                # Clear existing checkpoints
-                execute_write(
-                    "DELETE FROM security_checkpoints WHERE cluster_id = ?",
-                    (cluster_id,)
-                )
-                
-                # Generate new checkpoints
-                checkpoints = geocoder.identify_cluster_access_points(cluster_id)
-                if checkpoints:
-                    processed += 1
-            
-            return jsonify({
-                "status": "success",
-                "message": f"Generated checkpoints for {processed} clusters",
-                "total_clusters": len(clusters)
-            })
+    except ValueError as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -202,45 +149,39 @@ def generate_checkpoints():
             "message": f"Error generating checkpoints: {str(e)}"
         })
 
-@clustering_bp.route('/cluster_details/<int:cluster_id>', methods=['GET'])
-def cluster_details(cluster_id):
-    """Get detailed information about a specific cluster"""
+@clustering_bp.route('/delete_checkpoint/<int:checkpoint_id>', methods=['POST'])
+def delete_checkpoint(checkpoint_id):
+    """Delete a checkpoint"""
     try:
-        # Get cluster information
-        cluster = execute_read(
-            """SELECT id, name, centroid_lat, centroid_lon 
-               FROM clusters WHERE id = ?""",
-            (cluster_id,),
-            one=True
-        )
-        
-        if not cluster:
-            return jsonify({"status": "error", "message": "Cluster not found"})
-        
-        # Get locations in this cluster
-        locations = execute_read(
-            """SELECT l.id, l.lat, l.lon, l.street
-               FROM locations l
-               JOIN location_clusters lc ON l.id = lc.location_id
-               WHERE lc.cluster_id = ?""",
-            (cluster_id,)
-        )
-        
-        # Get checkpoints for this cluster
-        checkpoints = execute_read(
-            """SELECT id, lat, lon, from_road_type, to_road_type, confidence
-               FROM security_checkpoints
-               WHERE cluster_id = ?""",
-            (cluster_id,)
-        )
-        
+        CheckpointService.delete_checkpoint(checkpoint_id)
         return jsonify({
             "status": "success",
-            "cluster": cluster,
-            "locations": locations,
-            "checkpoints": checkpoints
+            "message": "Checkpoint deleted successfully"
+        })
+    except ValueError as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         })
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({
+            "status": "error",
+            "message": f"Error deleting checkpoint: {str(e)}"
+        })
+
+@clustering_bp.route('/network_viz/<int:cluster_id>', methods=['GET'])
+def get_network_visualization(cluster_id):
+    """Check if network visualization is available for a cluster"""
+    try:
+        result = CheckpointService.check_visualization(cluster_id, current_app.root_path)
+        return jsonify({
+            "status": "success",
+            **result
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })

@@ -1,371 +1,671 @@
-// Global variables
-let checkpointMarkers = [];
-let editMode = false;
-let selectedClusterId = null;
-let currentClusterData = null;
-
-// Initialize checkpoints functionality
-function initCheckpoints(map) {
-    // Set up event listeners for the checkpoint controls
-    document.getElementById('show-checkpoints').addEventListener('change', function() {
-        toggleCheckpointVisibility(this.checked);
-    });
+/**
+ * Checkpoint Management Module
+ * Handles all checkpoint-related functionality
+ */
+const CheckpointManager = (function() {
+    // Private module variables
+    let _map = null;
+    let _checkpointMarkers = [];
+    let _selectedClusterId = null;
+    let _selectedClusterName = null;
+    let _editMode = false;
+    let _currentClusterData = null;
     
-    document.getElementById('generate-checkpoints-btn').addEventListener('click', function() {
-        generateCheckpoints();
-    });
+    /**
+     * Initialize the checkpoint manager
+     * @returns {Object} Public API
+     */
+    function initialize() {
+        // Wait for the map to be available
+        if (!window.clusterMap) {
+            Utils.debugLog("Map not available for checkpoint initialization");
+            return false;
+        }
+        
+        Utils.debugLog("CheckpointManager initializing with map from window.clusterMap");
+        _map = window.clusterMap;
+        
+        // Set up event listeners for checkpoint controls
+        const showCheckpointsToggle = document.getElementById('show-checkpoints');
+        const generateBtn = document.getElementById('generate-checkpoints-btn');
+        const editBtn = document.getElementById('toggle-edit-checkpoints-btn');
+        const saveBtn = document.getElementById('save-checkpoints-btn');
+        
+        if (showCheckpointsToggle) {
+            showCheckpointsToggle.addEventListener('change', function() {
+                toggleVisibility(this.checked);
+            });
+        }
+        
+        if (generateBtn) {
+            // Remove any existing event listeners to prevent duplicates
+            generateBtn.removeEventListener('click', handleGenerateClick);
+            
+            // Add fresh event listener with named function for easier debugging
+            generateBtn.addEventListener('click', handleGenerateClick);
+            Utils.debugLog('Generate checkpoints button handler attached');
+        } else {
+            Utils.debugLog('ERROR: Generate checkpoints button not found');
+        }
+        
+        if (editBtn) {
+            editBtn.addEventListener('click', function() {
+                Utils.debugLog('Edit checkpoints button clicked');
+                if (!_selectedClusterId) {
+                    Utils.debugLog('ERROR: No cluster selected');
+                    alert('Please select a cluster first');
+                    return;
+                }
+                toggleEditMode();
+            });
+        }
+        
+        if (saveBtn) {
+            saveBtn.addEventListener('click', function() {
+                Utils.debugLog('Save checkpoints button clicked');
+                saveCheckpoints();
+            });
+        }
+        
+        Utils.debugLog("Checkpoint manager initialized successfully");
+        return true;
+    }
     
-    document.getElementById('toggle-edit-checkpoints-btn').addEventListener('click', function() {
-        toggleEditMode();
-    });
-    
-    document.getElementById('save-checkpoints-btn').addEventListener('click', function() {
-        saveCheckpoints();
-    });
-    
-    // Function definitions
-    function toggleCheckpointVisibility(visible) {
-        checkpointMarkers.forEach(marker => {
-            if (visible) {
-                marker.addTo(map);
-            } else {
-                marker.remove();
+    /**
+     * Toggle checkpoint visibility
+     */
+    function toggleVisibility(visible) {
+        // FIX: Add null check for _map
+        if (!_map) {
+            Utils.debugLog("ERROR: Map not available for toggling visibility");
+            return;
+        }
+        
+        _checkpointMarkers.forEach(marker => {
+            if (marker) {
+                if (visible) {
+                    marker.addTo(_map);
+                } else {
+                    marker.remove();
+                }
             }
         });
     }
     
-    function loadCheckpoints(clusterId) {
-        // Clear existing checkpoints
-        checkpointMarkers.forEach(marker => marker.remove());
-        checkpointMarkers = [];
+    /**
+     * Load checkpoints for a cluster
+     */
+    function loadCheckpoints(clusterId, clusterName) {
+        Utils.debugLog(`Loading checkpoints for cluster ${clusterId}`);
         
-        selectedClusterId = clusterId;
+        _selectedClusterId = clusterId;
+        _selectedClusterName = clusterName || `Cluster ${clusterId}`;
         
-        if (!clusterId) {
-            document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                '<p class="text-muted">Select a cluster to view checkpoints</p>';
+        // Update to use consistent URL pattern
+        const url = `/checkpoint/cluster/${clusterId}/checkpoints`;
+        
+        Utils.debugLog(`Sending request to load checkpoints for cluster ${clusterId}`);
+        
+        fetch(url)
+            .then(response => {
+                Utils.debugLog(`Load checkpoints response status: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                Utils.debugLog(`Checkpoint data received: ${JSON.stringify(data).substring(0, 100)}...`);
+                
+                if (!data.checkpoints || !Array.isArray(data.checkpoints)) {
+                    Utils.debugLog(`No checkpoints found for this cluster`);
+                    displayCheckpoints([]);
+                    return;
+                }
+                
+                Utils.debugLog(`Found ${data.checkpoints.length} checkpoints`);
+                displayCheckpoints(data.checkpoints);
+            })
+            .catch(error => {
+                Utils.debugLog(`Error loading checkpoints: ${error.message}`);
+                displayCheckpoints([]);
+            });
+    }
+    
+    // Fix the toggle edit mode function
+    function toggleEditMode(forceState) {
+        const editBtn = document.getElementById('toggle-edit-checkpoints-btn');
+        const saveBtn = document.getElementById('save-checkpoints-btn');
+        
+        if (!editBtn || !saveBtn) {
+            Utils.debugLog("ERROR: Edit or Save button not found");
+            return;
+        }
+        
+        // Check if map is available
+        if (!_map && window.clusterMap) {
+            _map = window.clusterMap;
+            Utils.debugLog("Retrieved map from window.clusterMap in toggleEditMode");
+        }
+        
+        if (!_map) {
+            Utils.debugLog("ERROR: Map not available for toggling edit mode");
+            return;
+        }
+        
+        // Determine if turning on or off
+        const turnOn = forceState !== undefined ? forceState : !_editMode;
+        _editMode = turnOn;
+        
+        Utils.debugLog(`Setting edit mode to: ${_editMode}`);
+        
+        if (turnOn) {
+            // Turn on edit mode
+            editBtn.classList.add('active');
+            editBtn.innerHTML = '<i class="fas fa-times mr-1"></i> Cancel Edit';
+            saveBtn.style.display = 'inline-block';
+            
+            // Add edit mode class to body for CSS targeting
+            document.body.classList.add('edit-mode');
+            
+            // Make all markers draggable
+            _checkpointMarkers.forEach(marker => {
+                if (marker && marker.dragging) {
+                    marker.options.draggable = true;
+                    marker.dragging.enable();
+                }
+            });
+            
+            // Add map click handler for adding new checkpoints
+            if (_map && _map.on) {
+                _map.on('click', handleMapClick);
+            }
+            
+            Utils.debugLog('Edit mode ON');
+            Utils.showNotification('Checkpoint edit mode activated. Drag checkpoints to relocate them, click Save Changes when done.', 'info');
+        } else {
+            // Turn off edit mode
+            editBtn.classList.remove('active');
+            editBtn.innerHTML = '<i class="fas fa-edit mr-1"></i> Edit Mode';
+            saveBtn.style.display = 'none';
+            
+            // Remove edit mode class
+            document.body.classList.remove('edit-mode');
+            
+            // Remove map click handler (with null check)
+            if (_map && typeof _map.off === 'function') {
+                _map.off('click', handleMapClick);
+            }
+            
+            // Make all markers non-draggable
+            _checkpointMarkers.forEach(marker => {
+                if (marker && marker.dragging) {
+                    marker.options.draggable = false;
+                    marker.dragging.disable();
+                }
+            });
+            
+            // Remove active edit highlights
+            document.querySelectorAll('.checkpoint-item').forEach(item => {
+                item.classList.remove('active-edit');
+            });
+            
+            Utils.debugLog('Edit mode OFF');
+        }
+    }
+    
+    // Continue with the rest of the functions...
+    // Add handleMapClick which was defined elsewhere
+    function handleMapClick(e) {
+        if (!_editMode || !_selectedClusterId) return;
+        
+        Utils.debugLog(`Map clicked at ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`);
+        
+        // Create a new checkpoint at this position
+        const newCheckpoint = {
+            lat: e.latlng.lat,
+            lon: e.latlng.lng,
+            from_type: 'unclassified',
+            to_type: 'residential',
+            confidence: 0.7,
+            id: `temp-${Date.now()}`, // Temporary ID until saved
+            source: 'manual'
+        };
+        
+        // Collect existing checkpoints
+        const checkpoints = _checkpointMarkers
+            .filter(m => m && m.checkpoint)
+            .map(m => m.checkpoint);
+        
+        // Add the new one
+        checkpoints.push(newCheckpoint);
+        
+        // Display updated checkpoints
+        displayCheckpoints(checkpoints);
+        
+        // Show save notification
+        Utils.showNotification('New checkpoint added. Click "Save Changes" to keep your changes.', 'info');
+    }
+    
+    // Make sure to initialize only after DOM is fully loaded
+    let initialized = false;
+    function ensureInitialized() {
+        if (!initialized && window.clusterMap) {
+            initialized = initialize();
+            return initialized;
+        }
+        return initialized;
+    }
+    
+    // Initialize on DOM ready and expose module 
+    document.addEventListener('DOMContentLoaded', function() {
+        Utils.debugLog("DOM loaded, waiting for map");
+        
+        // Use a visibility check to ensure we catch when map becomes available
+        const checkMapInterval = setInterval(() => {
+            if (window.clusterMap) {
+                Utils.debugLog("Map detected, initializing CheckpointManager");
+                clearInterval(checkMapInterval);
+                if (ensureInitialized()) {
+                    Utils.debugLog("CheckpointManager initialized successfully");
+                } else {
+                    Utils.debugLog("Failed to initialize CheckpointManager");
+                }
+            }
+        }, 500);
+    });
+    
+    // Public API
+    window.CheckpointManager = {
+        loadCheckpoints: function(clusterId, clusterName) {
+            // Ensure we're initialized before trying to use
+            if (ensureInitialized()) {
+                loadCheckpoints(clusterId, clusterName);
+            } else {
+                Utils.debugLog("ERROR: Cannot load checkpoints, CheckpointManager not initialized");
+            }
+        },
+        toggleVisibility: function(visible) {
+            if (ensureInitialized()) {
+                toggleVisibility(visible);
+            } else {
+                Utils.debugLog("ERROR: Cannot toggle visibility, CheckpointManager not initialized");
+            }
+        },
+        generateCheckpoints: function() {
+            if (ensureInitialized()) {
+                generateCheckpoints();
+            }
+        },
+        toggleEditMode: function(forceState) {
+            if (ensureInitialized()) {
+                toggleEditMode(forceState);
+            }
+        }
+    };
+    
+    // Helper functions will be defined here...
+    function displayCheckpoints(checkpoints) {
+        Utils.debugLog(`Displaying ${checkpoints ? checkpoints.length : 0} checkpoints`);
+        
+        try {
+            // Check for valid data
+            if (!checkpoints || !Array.isArray(checkpoints)) {
+                Utils.debugLog("ERROR: Invalid checkpoints data received");
+                return;
+            }
+            
+            // Clear existing checkpoint markers from the map
+            _checkpointMarkers.forEach(marker => marker.remove());
+            _checkpointMarkers = [];
+            
+            // Update sidebar list
+            const container = document.querySelector('#checkpoint-list .checkpoint-items');
+            if (!container) {
+                Utils.debugLog("ERROR: Checkpoint list container not found!");
+                return;
+            }
+            
+            // Clear the container
+            container.innerHTML = '';
+            Utils.debugLog("Cleared checkpoint container");
+            
+            // Display checkpoints both in sidebar and on map
+            checkpoints.forEach((cp, index) => {
+                const checkpointNumber = index + 1;
+                Utils.debugLog(`Processing checkpoint ${checkpointNumber}: ${cp.lat}, ${cp.lon}`);
+                
+                // 1. Add to sidebar
+                const cpItem = document.createElement('div');
+                cpItem.className = 'checkpoint-item';
+                cpItem.innerHTML = `
+                    <h6>Checkpoint #${checkpointNumber}</h6>
+                    <p>
+                        <small>Coordinates: ${cp.lat.toFixed(6)}, ${cp.lon.toFixed(6)}</small><br>
+                        <small>Road Types: ${cp.from_type || 'unknown'} → ${cp.to_type || 'residential'}</small><br>
+                        <small>Confidence: ${Math.round((cp.confidence || 0.7) * 100)}%</small>
+                    </p>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-primary btn-sm edit-checkpoint-btn" 
+                                data-checkpoint-id="${cp.id}">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm delete-checkpoint-btn" 
+                                data-checkpoint-id="${cp.id}">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    </div>
+                `;
+                container.appendChild(cpItem);
+                Utils.debugLog(`Added checkpoint ${checkpointNumber} to sidebar`);
+                
+                // 2. Add to map with numbered label
+                if (!_map) {
+                    Utils.debugLog("ERROR: Map not available for adding checkpoint markers");
+                    return;
+                }
+                
+                const confidence = cp.confidence || 0.7;
+                
+                // Calculate color based on confidence (red→yellow→green)
+                const r = Math.floor(255 * (1 - confidence));
+                const g = Math.floor(200 * confidence);
+                const color = `rgb(${r}, ${g}, 0)`;
+                
+                // Create marker with numbered label
+                try {
+                    const marker = L.marker([cp.lat, cp.lon], {
+                        icon: L.divIcon({
+                            className: 'checkpoint-marker',
+                            html: `<div class="checkpoint-icon" style="background-color: ${color};">
+                                    <div class="checkpoint-number">${checkpointNumber}</div>
+                                  </div>`,
+                            iconSize: [30, 30],
+                            iconAnchor: [15, 15]
+                        }),
+                        draggable: _editMode
+                    }).addTo(_map);
+                    
+                    // Add popup with checkpoint info
+                    marker.bindPopup(`
+                        <strong>Checkpoint #${checkpointNumber}</strong><br>
+                        <strong>Road transition:</strong> ${cp.from_type || 'unknown'} → ${cp.to_type || 'residential'}<br>
+                        <strong>Confidence:</strong> ${Math.round(confidence * 100)}%
+                    `, {
+                        autoPan: false
+                    });
+                    
+                    // Store checkpoint data with marker
+                    marker.checkpoint = cp;
+                    marker.checkpointNumber = checkpointNumber;
+                    
+                    // Add to list of markers
+                    _checkpointMarkers.push(marker);
+                    
+                    Utils.debugLog(`Added checkpoint marker #${checkpointNumber} at ${cp.lat.toFixed(6)}, ${cp.lon.toFixed(6)}`);
+                } catch (mapError) {
+                    Utils.debugLog(`ERROR creating marker: ${mapError.message}`);
+                }
+            });
+            
+            // Add event listeners to the buttons
+            addCheckpointButtonHandlers();
+            Utils.debugLog(`Successfully displayed ${checkpoints.length} checkpoints`);
+        } catch (error) {
+            Utils.debugLog(`CRITICAL ERROR in displayCheckpoints: ${error.message}`);
+            console.error("Error displaying checkpoints:", error);
+            
+            // Fallback: Show error in UI
+            const container = document.querySelector('#checkpoint-list .checkpoint-items');
+            if (container) {
+                container.innerHTML = `
+                    <p class="text-danger">Error displaying checkpoints: ${error.message}</p>
+                    <p class="text-muted">Try refreshing the page</p>
+                `;
+            }
+        }
+    }
+
+    // Helper function to add event handlers to checkpoint buttons
+    function addCheckpointButtonHandlers() {
+        try {
+            // Edit button handler
+            document.querySelectorAll('.edit-checkpoint-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const checkpointId = this.dataset.checkpointId;
+                    editCheckpoint(checkpointId);
+                });
+            });
+            
+            // Delete button handler
+            document.querySelectorAll('.delete-checkpoint-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const checkpointId = this.dataset.checkpointId;
+                    deleteCheckpoint(checkpointId);
+                });
+            });
+            
+            // Add save button event listener if it exists
+            const saveBtn = document.getElementById('save-checkpoints-btn');
+            if (saveBtn) {
+                saveBtn.removeEventListener('click', saveCheckpoints);
+                saveBtn.addEventListener('click', saveCheckpoints);
+            }
+            
+            Utils.debugLog("Added event handlers to checkpoint buttons");
+        } catch (error) {
+            Utils.debugLog(`ERROR adding button handlers: ${error.message}`);
+        }
+    }
+
+    // Function to edit a specific checkpoint
+    function editCheckpoint(checkpointId) {
+        Utils.debugLog(`Edit checkpoint ${checkpointId} clicked`);
+        
+        // Find the marker for this checkpoint
+        const marker = _checkpointMarkers.find(m => 
+            m && m.checkpoint && m.checkpoint.id == checkpointId);
+        
+        if (marker) {
+            // Enable edit mode first
+            toggleEditMode(true);
+            
+            // Make this specific marker draggable
+            marker.options.draggable = true;
+            if (marker.dragging) marker.dragging.enable();
+            
+            // Flash the marker to show it's selected
+            const icon = marker._icon;
+            if (icon) {
+                icon.style.transition = 'transform 0.3s';
+                icon.style.transform = 'scale(1.5)';
+                setTimeout(() => { 
+                    if (icon.style) icon.style.transform = 'scale(1)'; 
+                }, 300);
+            }
+            
+            // Highlight this checkbox in the sidebar
+            document.querySelectorAll('.checkpoint-item').forEach(item => {
+                item.classList.remove('active-edit');
+            });
+            
+            const checkpointItem = document.querySelector(`.checkpoint-item:nth-child(${marker.checkpointNumber})`);
+            if (checkpointItem) {
+                checkpointItem.classList.add('active-edit');
+                checkpointItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            
+            // Show instructions
+            Utils.showNotification('Drag the checkpoint to adjust its position, then click Save Changes', 'info');
+        } else {
+            Utils.debugLog(`ERROR: Could not find marker for checkpoint ${checkpointId}`);
+        }
+    }
+
+    // Function to delete a checkpoint
+    function deleteCheckpoint(checkpointId) {
+        Utils.debugLog(`Delete checkpoint ${checkpointId} clicked`);
+        
+        if (!confirm('Are you sure you want to delete this checkpoint?')) {
             return;
         }
         
         // Show loading indicator
-        document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-            '<p class="text-muted"><i class="fas fa-spinner fa-spin"></i> Loading checkpoints...</p>';
+        const btnElement = document.querySelector(`.delete-checkpoint-btn[data-checkpoint-id="${checkpointId}"]`);
+        if (btnElement) {
+            const originalHtml = btnElement.innerHTML;
+            btnElement.disabled = true;
+            btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
         
-        // Fetch checkpoints for the selected cluster
-        fetch(`/clustering/checkpoints/${clusterId}`)
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    currentClusterData = data;
+        // Use the correct endpoint URL - change from /clustering/delete_checkpoint/
+        fetch(`/checkpoint/checkpoint/delete_checkpoint/${checkpointId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => {
+            Utils.debugLog(`Delete checkpoint response status: ${response.status}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            Utils.debugLog(`Delete checkpoint response: ${JSON.stringify(data)}`);
+            
+            if (data.status === 'success') {
+                // Find and remove the marker
+                const markerIndex = _checkpointMarkers.findIndex(m => 
+                    m && m.checkpoint && m.checkpoint.id == checkpointId);
                     
-                    // Check if we have checkpoints
-                    if (data.checkpoints && data.checkpoints.length > 0) {
-                        displayCheckpoints(data.cluster, data.checkpoints);
-                        updateCheckpointList(data.checkpoints);
-                    } else {
-                        document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                            '<p class="text-muted">No checkpoints detected. Click "Auto-Generate" to detect access points.</p>';
-                    }
-                } else {
-                    showNotification(data.message, 'error');
-                    document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                        '<p class="text-danger">Error loading checkpoints</p>';
+                if (markerIndex >= 0) {
+                    _checkpointMarkers[markerIndex].remove();
+                    _checkpointMarkers.splice(markerIndex, 1);
                 }
-            })
-            .catch(error => {
-                console.error('Error loading checkpoints:', error);
-                showNotification('Failed to load checkpoints', 'error');
-                document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                    '<p class="text-danger">Error loading checkpoints</p>';
-            });
-    }
-    
-    function displayCheckpoints(cluster, checkpoints) {
-        const showCheckpoints = document.getElementById('show-checkpoints').checked;
-        if (!showCheckpoints) return;
-        
-        checkpoints.forEach(cp => {
-            const marker = createCheckpointMarker(cp, cluster);
-            checkpointMarkers.push(marker);
-        });
-    }
-    
-    function createCheckpointMarker(checkpoint, cluster) {
-        // Default confidence value if not provided
-        const confidence = checkpoint.confidence || 0.7;
-        
-        // Color is based on confidence (red → yellow → green)
-        const color = getColorFromConfidence(confidence);
-        
-        // Label shows the source of this checkpoint
-        const sourceLabel = getSourceLabel(checkpoint.source);
-        
-        // Create a custom marker
-        const marker = L.marker([checkpoint.lat, checkpoint.lon], {
-            icon: L.divIcon({
-                className: 'checkpoint-marker',
-                html: `<div class="checkpoint-icon" style="background-color: ${color};">
-                        <i class="fas fa-shield-alt"></i>
-                      </div>`,
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-            }),
-            draggable: editMode
-        }).addTo(map);
-        
-        // Add popup with checkpoint info
-        marker.bindPopup(`
-            <strong>Security Checkpoint</strong><br>
-            <strong>Road transition:</strong> ${checkpoint.from_road_type || 'unknown'} → ${checkpoint.to_road_type || 'residential'}<br>
-            <strong>Confidence:</strong> ${Math.round(confidence * 100)}%<br>
-            <strong>Source:</strong> ${sourceLabel}<br>
-            ${editMode ? '<button class="btn btn-sm btn-danger remove-checkpoint">Remove</button>' : ''}
-        `);
-        
-        // Add reference to the checkpoint data
-        marker.checkpoint = checkpoint;
-        
-        // Connect to cluster center with a dashed line
-        if (cluster && cluster.centroid_lat && cluster.centroid_lon) {
-            const line = L.polyline([
-                [checkpoint.lat, checkpoint.lon],
-                [cluster.centroid_lat, cluster.centroid_lon]
-            ], {
-                color: color,
-                weight: 2,
-                opacity: 0.6,
-                dashArray: '5, 5'
-            }).addTo(map);
-            
-            // Add to markers array so we can remove it later
-            checkpointMarkers.push(line);
-        }
-        
-        // Add event listeners for edit mode
-        if (editMode) {
-            marker.on('dragend', function() {
-                const pos = marker.getLatLng();
-                checkpoint.lat = pos.lat;
-                checkpoint.lon = pos.lng;
-                updateCheckpointList(checkpointMarkers.filter(m => m instanceof L.Marker).map(m => m.checkpoint));
-            });
-            
-            marker.on('popupopen', function() {
-                const btn = document.querySelector('.remove-checkpoint');
-                if (btn) {
-                    btn.addEventListener('click', function() {
-                        removeCheckpoint(marker);
-                    });
+                
+                // Remove from sidebar
+                const checkpointItem = document.querySelector(`.checkpoint-item:has(.delete-checkpoint-btn[data-checkpoint-id="${checkpointId}"])`);
+                if (checkpointItem) {
+                    checkpointItem.remove();
                 }
-            });
-        }
-        
-        return marker;
-    }
-    
-    function getColorFromConfidence(confidence) {
-        // Linear gradient from red (0) to green (1)
-        const r = Math.floor(255 * (1 - confidence));
-        const g = Math.floor(200 * confidence);
-        return `rgb(${r}, ${g}, 0)`;
-    }
-    
-    function getSourceLabel(source) {
-        // Translate source code to human-readable label
-        switch(source) {
-            case 'topology_bottleneck': 
-                return 'Road Network Bottleneck';
-            case 'betweenness_centrality': 
-                return 'Network Centrality Analysis';
-            case 'osm_barrier': 
-                return 'OpenStreetMap Barrier Tag';
-            case 'fallback_direction': 
-                return 'Directional Fallback';
-            case 'manual': 
-                return 'Manually Placed';
-            default: 
-                return source || 'Unknown';
-        }
-    }
-    
-    function updateCheckpointList(checkpoints) {
-        const container = document.querySelector('#checkpoint-list .checkpoint-items');
-        
-        if (!checkpoints || checkpoints.length === 0) {
-            container.innerHTML = '<p class="text-muted">No checkpoints detected for this cluster</p>';
-            return;
-        }
-        
-        let html = '';
-        checkpoints.forEach((cp, index) => {
-            const confidence = cp.confidence || 0.7;
-            const color = getColorFromConfidence(confidence);
-            const sourceLabel = getSourceLabel(cp.source);
-            
-            html += `
-                <div class="checkpoint-item" data-index="${index}">
-                    <div class="checkpoint-color-sample" style="background-color: ${color};"></div>
-                    <div class="checkpoint-details">
-                        <span class="checkpoint-name">Checkpoint ${index + 1}</span>
-                        <span class="checkpoint-source">${sourceLabel}</span>
-                    </div>
-                    <span class="badge badge-${confidence > 0.8 ? 'success' : confidence > 0.5 ? 'warning' : 'danger'} ml-auto">
-                        ${Math.round(confidence * 100)}%
-                    </span>
-                </div>
-            `;
-        });
-        
-        container.innerHTML = html;
-    }
-    
-    function toggleEditMode() {
-        editMode = !editMode;
-        
-        // Update UI
-        document.getElementById('toggle-edit-checkpoints-btn').innerHTML = 
-            editMode ? '<i class="fas fa-times mr-1"></i> Cancel' : '<i class="fas fa-edit mr-1"></i> Edit Mode';
-        
-        document.getElementById('save-checkpoints-btn').style.display = 
-            editMode ? 'inline-block' : 'none';
-        
-        // Update markers
-        checkpointMarkers.forEach(marker => {
-            if (marker instanceof L.Marker) {
-                marker.setDraggable(editMode);
-                // Refresh popup content
-                const content = marker.getPopup().getContent();
-                if (editMode && !content.includes('Remove')) {
-                    marker.setPopupContent(content.replace('</div>', '</div><button class="btn btn-sm btn-danger remove-checkpoint">Remove</button>'));
-                } else if (!editMode && content.includes('Remove')) {
-                    marker.setPopupContent(content.replace('<button class="btn btn-sm btn-danger remove-checkpoint">Remove</button>', ''));
+                
+                Utils.showNotification('Checkpoint deleted successfully', 'success');
+                
+                // Reload checkpoints to clean up display and renumber
+                loadCheckpoints(_selectedClusterId, _selectedClusterName);
+            } else {
+                Utils.showNotification(`Error: ${data.message}`, 'error');
+                
+                // Reset button state
+                if (btnElement) {
+                    btnElement.disabled = false;
+                    btnElement.innerHTML = originalHtml;
                 }
             }
-        });
-        
-        // Show instruction if in edit mode
-        if (editMode) {
-            showNotification('Click on the map to add checkpoints, drag to move them', 'info');
+        })
+        .catch(error => {
+            Utils.debugLog(`ERROR deleting checkpoint: ${error.message}`);
+            Utils.showNotification('Error deleting checkpoint', 'error');
             
-            // Add click handler for adding new checkpoints
-            map.on('click', addNewCheckpoint);
-        } else {
-            // Remove click handler
-            map.off('click', addNewCheckpoint);
-        }
-    }
-    
-    function addNewCheckpoint(e) {
-        if (!editMode || !selectedClusterId) return;
-        
-        // Create a new checkpoint object
-        const checkpoint = {
-            lat: e.latlng.lat,
-            lon: e.latlng.lng,
-            from_type: 'unclassified', 
-            to_type: 'residential',
-            confidence: 0.7,
-            source: 'manual'
-        };
-        
-        // Create marker
-        const marker = createCheckpointMarker(checkpoint, currentClusterData.cluster);
-        checkpointMarkers.push(marker);
-        
-        // Update the list
-        updateCheckpointList(checkpointMarkers.filter(m => m instanceof L.Marker).map(m => m.checkpoint));
-    }
-    
-    function removeCheckpoint(marker) {
-        // Remove from map
-        marker.remove();
-        
-        // Remove from array
-        const index = checkpointMarkers.indexOf(marker);
-        if (index > -1) {
-            checkpointMarkers.splice(index, 1);
-        }
-        
-        // Remove any connecting lines too
-        checkpointMarkers = checkpointMarkers.filter(m => {
-            if (m instanceof L.Polyline) {
-                const points = m.getLatLngs();
-                if (points.length === 2) {
-                    // Check if this line connects to the marker we're removing
-                    if ((points[0].lat === marker.getLatLng().lat && points[0].lng === marker.getLatLng().lng) ||
-                        (points[1].lat === marker.getLatLng().lat && points[1].lng === marker.getLatLng().lng)) {
-                        m.remove();
-                        return false;
-                    }
-                }
+            // Reset button state
+            if (btnElement) {
+                btnElement.disabled = false;
+                btnElement.innerHTML = originalHtml;
             }
-            return true;
         });
-        
-        // Update the list
-        updateCheckpointList(checkpointMarkers.filter(m => m instanceof L.Marker).map(m => m.checkpoint));
     }
-    
+
+    // Function to save all checkpoint changes
     function saveCheckpoints() {
-        if (!selectedClusterId) {
-            showNotification('No cluster selected', 'warning');
+        Utils.debugLog('Save checkpoints button clicked');
+        
+        if (!_selectedClusterId) {
+            Utils.showNotification('No cluster selected', 'error');
             return;
         }
         
-        // Get checkpoint data from markers
-        const checkpoints = checkpointMarkers
-            .filter(m => m instanceof L.Marker)
+        // Collect data from markers
+        const checkpoints = _checkpointMarkers
+            .filter(marker => marker && marker.getLatLng && marker.checkpoint)
             .map(marker => {
-                const cp = marker.checkpoint;
+                const position = marker.getLatLng();
+                const cp = marker.checkpoint || {};
+                
                 return {
-                    lat: cp.lat,
-                    lon: cp.lon,
-                    from_type: cp.from_type || 'unknown',
+                    id: cp.id,
+                    lat: position.lat,
+                    lon: position.lng,
+                    from_type: cp.from_type || 'unclassified',
                     to_type: cp.to_type || 'residential',
                     confidence: cp.confidence || 0.7,
                     source: cp.source || 'manual'
                 };
             });
         
+        if (checkpoints.length === 0) {
+            Utils.showNotification('No checkpoints to save', 'warning');
+            return;
+        }
+        
+        Utils.debugLog(`Saving ${checkpoints.length} checkpoints for cluster ${_selectedClusterId}`);
+        
         // Show loading state
         const saveBtn = document.getElementById('save-checkpoints-btn');
-        const originalSaveText = saveBtn.innerHTML;
-        saveBtn.disabled = true;
-        saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Saving...';
+        if (saveBtn) {
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Saving...';
+        }
         
-        // Send to server
-        fetch(`/clustering/checkpoints/${selectedClusterId}`, {
+        // Use the correct endpoint URL - change from /clustering/save_checkpoints/
+        fetch(`/checkpoint/checkpoint/save_checkpoints/${_selectedClusterId}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                checkpoints: checkpoints
-            })
+            body: JSON.stringify({ checkpoints: checkpoints })
         })
-        .then(response => response.json())
+        .then(response => {
+            Utils.debugLog(`Save checkpoints response status: ${response.status}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            Utils.debugLog(`Save checkpoints response: ${JSON.stringify(data)}`);
+            
             if (data.status === 'success') {
-                showNotification(data.message, 'success');
-                toggleEditMode(); // Exit edit mode
+                Utils.showNotification('Checkpoints saved successfully', 'success');
+                
+                // Turn off edit mode
+                toggleEditMode(false);
+                
+                // Reload fresh data
+                loadCheckpoints(_selectedClusterId, _selectedClusterName);
             } else {
-                showNotification(data.message, 'error');
+                Utils.showNotification(`Error: ${data.message}`, 'error');
             }
         })
         .catch(error => {
             console.error('Error saving checkpoints:', error);
-            showNotification('Failed to save checkpoints', 'error');
+            Utils.debugLog(`ERROR saving checkpoints: ${error.message}`);
+            Utils.showNotification('Error saving checkpoints', 'error');
         })
         .finally(() => {
             // Restore button state
-            saveBtn.disabled = false;
-            saveBtn.innerHTML = originalSaveText;
+            if (saveBtn) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = '<i class="fas fa-save mr-1"></i> Save Changes';
+            }
         });
     }
-    
+
     function generateCheckpoints() {
-        if (!selectedClusterId) {
-            showNotification('Please select a cluster first', 'warning');
+        if (!_selectedClusterId) {
+            Utils.showNotification('Please select a cluster first', 'warning');
+            Utils.debugLog('ERROR: No cluster selected for checkpoint generation');
             return;
         }
         
@@ -375,86 +675,74 @@ function initCheckpoints(map) {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> Generating...';
         
-        // Clear existing checkpoints
-        checkpointMarkers.forEach(marker => marker.remove());
-        checkpointMarkers = [];
+        const checkpointItems = document.querySelector('#checkpoint-list .checkpoint-items');
+        if (checkpointItems) {
+            checkpointItems.innerHTML = '<p class="text-muted"><i class="fas fa-spinner fa-spin"></i> Generating checkpoints...</p>';
+        }
         
-        fetch('/clustering/generate_checkpoints', {
+        Utils.debugLog(`Sending request to generate checkpoints for cluster ${_selectedClusterId}`);
+        
+        // Make API call with explicit error handling
+        fetch(`/clustering/generate_checkpoints/${_selectedClusterId}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                cluster_id: selectedClusterId
-            })
+            }
         })
-        .then(response => response.json())
+        .then(response => {
+            Utils.debugLog(`Generate checkpoints response status: ${response.status}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            Utils.debugLog(`Generate checkpoints response data: ${JSON.stringify(data).substring(0, 100)}...`);
+            
             if (data.status === 'success') {
-                showNotification(data.message, 'success');
+                Utils.showNotification('Checkpoints generated successfully', 'success');
+                Utils.debugLog('Checkpoint generation successful, reloading checkpoints');
                 
-                // Refresh checkpoints
-                loadCheckpoints(selectedClusterId);
+                // Important: Reload checkpoints to refresh the display
+                loadCheckpoints(_selectedClusterId, _selectedClusterName);
             } else {
-                showNotification(data.message, 'error');
-                document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                    '<p class="text-danger">Error generating checkpoints</p>';
+                Utils.debugLog(`ERROR: Checkpoint generation failed: ${data.message || 'Unknown error'}`);
+                Utils.showNotification(data.message || 'Error generating checkpoints', 'error');
+                
+                if (checkpointItems) {
+                    checkpointItems.innerHTML = 
+                        `<p class="text-danger">Error generating checkpoints: ${data.message || 'Unknown error'}</p>`;
+                }
             }
         })
         .catch(error => {
+            Utils.debugLog(`CRITICAL ERROR: Checkpoint generation request failed: ${error.message}`);
             console.error('Error generating checkpoints:', error);
-            showNotification('Failed to generate checkpoints', 'error');
-            document.querySelector('#checkpoint-list .checkpoint-items').innerHTML = 
-                '<p class="text-danger">Error generating checkpoints</p>';
+            
+            Utils.showNotification(`Failed to generate checkpoints: ${error.message}`, 'error');
+            
+            if (checkpointItems) {
+                checkpointItems.innerHTML = 
+                    `<p class="text-danger">Error generating checkpoints: ${error.message}</p>`;
+            }
         })
         .finally(() => {
             // Restore button state
-            btn.disabled = false;
-            btn.innerHTML = originalText;
-        });
-    }
-    
-    // Return public methods
-    return {
-        loadCheckpoints: loadCheckpoints
-    };
-}
-
-// Set up the checkpoint functionality when the document is ready
-document.addEventListener('DOMContentLoaded', function() {
-    // Check if we're on the clusters page with a map
-    const mapElement = document.getElementById('map');
-    if (!mapElement) return;
-    
-    // Wait for the map to be initialized
-    const waitForMap = setInterval(function() {
-        if (window.clusterMap) {
-            clearInterval(waitForMap);
-            
-            // Initialize checkpoints module
-            window.checkpointsModule = initCheckpoints(window.clusterMap);
-            
-            // Set up cluster selection to load checkpoints
-            const observer = new MutationObserver(function(mutations) {
-                setupClusterClickHandlers();
-            });
-            
-            const clusterList = document.getElementById('cluster-list');
-            if (clusterList) {
-                observer.observe(clusterList, { childList: true, subtree: true });
-                setupClusterClickHandlers();
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
             }
-        }
-    }, 100);
-    
-    function setupClusterClickHandlers() {
-        document.querySelectorAll('.cluster-item').forEach(item => {
-            item.addEventListener('click', function() {
-                const clusterId = this.dataset.clusterId;
-                if (clusterId && window.checkpointsModule) {
-                    window.checkpointsModule.loadCheckpoints(parseInt(clusterId));
-                }
-            });
         });
     }
-});
+
+    // Define the handler as a separate named function
+    function handleGenerateClick() {
+        Utils.debugLog('Generate checkpoints button clicked');
+        if (!_selectedClusterId) {
+            Utils.debugLog('ERROR: No cluster selected');
+            Utils.showNotification('Please select a cluster first', 'warning');
+            return;
+        }
+        generateCheckpoints();
+    }
+})();

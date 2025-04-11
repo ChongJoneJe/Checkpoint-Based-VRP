@@ -1,10 +1,12 @@
 from flask import Flask
+import osmnx as ox
 import os
 from utils.database import ensure_db_exists
 from algorithms.dbscan import GeoDBSCAN
 
 def create_app():
     app = Flask(__name__)
+    app.secret_key = 'your-secure-random-key-here'
     
     # Ensure database exists
     ensure_db_exists()
@@ -16,6 +18,16 @@ def create_app():
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'connect_args': {'timeout': 30, 'check_same_thread': False}
     }
+
+    ox.settings.use_cache = True
+    ox.settings.log_console = True
+    ox.settings.cache_folder = os.path.join(os.path.dirname(__file__), 'cache', 'osmnx')
+    ox.settings.timeout = 180
+    ox.settings.memory = 8000
+    
+    cache_dir = os.path.join(os.path.dirname(__file__), 'cache', 'osmnx')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
     
     # Initialize geocoder only once
     geocoder = GeoDBSCAN(api_key=app.config.get('ORS_API_KEY'))

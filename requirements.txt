@@ -7,3 +7,4 @@ folium 0.19.5
 scikit-learn 1.6.1
 geopy 2.4.1
 osmnx 2.0.2
+matpltlib 3.10.1

@@ -6,10 +6,18 @@ from services.preset_service import PresetService
 def get_presets():
     """Get all available presets from the database"""
     try:
-        presets_data = PresetService.get_all_presets()
-        return jsonify({"presets": presets_data})
+        presets_data = PresetService.get_all_presets_basic()
+        return jsonify({
+            "status": "success",
+            "presets": presets_data
+        })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error", 
+            "message": str(e)
+        })
 
 @presets_bp.route('/save_preset', methods=['POST'])
 def save_preset():

@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS security_checkpoints (
     from_road_type TEXT,
     to_road_type TEXT,
     confidence REAL DEFAULT 0.7,
-    source TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE CASCADE
 );
 

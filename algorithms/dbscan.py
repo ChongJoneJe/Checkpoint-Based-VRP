@@ -1269,12 +1269,14 @@ class GeoDBSCAN:
         print(f"DEBUG: Cleaned {updated} location street names in database")
         return updated
     
-    def identify_cluster_access_points(self, cluster_id):
+    def identify_cluster_access_points(self, cluster_id, regenerate=True):
         """
-        Identify access points for a cluster using network topology
+        Identify access points for a cluster using network topology analysis
+        and route-based detection.
         
         Args:
             cluster_id: ID of the cluster
+            regenerate: Whether to regenerate checkpoints even if they exist
             
         Returns:
             list: List of checkpoint dictionaries
@@ -1294,24 +1296,98 @@ class GeoDBSCAN:
             print(f"DEBUG: No locations found for cluster {cluster_id}")
             return []
         
-        # 2. Get cluster center
+        # 2. Check if the cluster already has checkpoints - but only use them if not regenerating
+        existing_checkpoints = execute_read(
+            "SELECT id, lat, lon FROM security_checkpoints WHERE cluster_id = ?",
+            (cluster_id,)
+        )
+        
+        if existing_checkpoints and not regenerate:
+            print(f"DEBUG: Cluster already has {len(existing_checkpoints)} defined checkpoints")
+            # Convert to the expected format
+            access_points = [{
+                'id': cp['id'],
+                'lat': cp['lat'],
+                'lon': cp['lon'],
+                'from_type': 'existing',
+                'to_type': 'existing',
+                'confidence': 1.0
+            } for cp in existing_checkpoints]
+            return access_points
+        
+        # If we're regenerating checkpoints, delete existing ones first
+        if existing_checkpoints and regenerate:
+            print(f"DEBUG: Deleting {len(existing_checkpoints)} existing checkpoints for regeneration")
+            execute_write("DELETE FROM security_checkpoints WHERE cluster_id = ?", (cluster_id,))
+        
+        # 3. Get cluster center and info
         cluster_info = execute_read(
             "SELECT name, centroid_lat, centroid_lon FROM clusters WHERE id = ?",
             (cluster_id,),
             one=True
         )
         
+        # 4. Get warehouse location with improved error handling
+        warehouse_coords = None
+        try:
+            # First check the table structure
+            table_info = execute_read(
+                "PRAGMA table_info(warehouses)"
+            )
+            
+            if table_info:
+                # Look for latitude and longitude columns (with flexible naming)
+                lat_col = None
+                lon_col = None
+                
+                for col in table_info:
+                    col_name = col['name'].lower()
+                    if col_name in ['lat', 'latitude']:
+                        lat_col = col['name']
+                    elif col_name in ['lon', 'lng', 'longitude']:
+                        lon_col = col['name']
+                
+                if lat_col and lon_col:
+                    # Use the discovered column names
+                    query = f"SELECT {lat_col}, {lon_col} FROM warehouses LIMIT 1"
+                    warehouse = execute_read(query, one=True)
+                    
+                    if warehouse:
+                        warehouse_coords = (warehouse[lat_col], warehouse[lon_col])
+                        print(f"DEBUG: Found warehouse at ({warehouse_coords[0]}, {warehouse_coords[1]})")
+                else:
+                    print("DEBUG: Warehouse table exists but doesn't have expected lat/lon columns")
+            else:
+                print("DEBUG: Warehouses table not found")
+        except Exception as e:
+            print(f"DEBUG: Error getting warehouse location: {str(e)}")
+        
         # Prepare inputs for network analysis
         location_coords = [(loc['lat'], loc['lon']) for loc in locations]
         cluster_center = (cluster_info['centroid_lat'], cluster_info['centroid_lon'])
         
-        # 3. Use network analysis to find access points
+        # 5. Use network analysis to find access points
         try:
-            access_points = self.network_analyzer.find_cluster_access_points(
-                location_coords, cluster_center
+            if warehouse_coords:
+                print(f"DEBUG: Using route-based analysis with warehouse")
+                access_points = self.network_analyzer.find_route_based_access_points(
+                    location_coords, warehouse_coords
+                )
+            else:
+                print(f"DEBUG: No warehouse found, using topology-based analysis")
+                access_points = self.network_analyzer.find_cluster_access_points(
+                    location_coords, cluster_center
+                )
+            
+            # Generate visualization for review
+            visualization_path = f"static/images/clusters/cluster_{cluster_id}_network.png"
+            self.network_analyzer.visualize_cluster_network(
+                location_coords, cluster_center, 
+                access_points, warehouse_coords,
+                output_path=visualization_path
             )
             
-            # 4. Save the access points to the database
+            # 6. Save the access points to the database
             for ap in access_points:
                 checkpoint_id = execute_write(
                     """INSERT INTO security_checkpoints 
@@ -1323,10 +1399,13 @@ class GeoDBSCAN:
                         ap['lon'], 
                         ap['from_type'], 
                         ap['to_type'],
-                        ap.get('confidence', 1.0)
+                        ap.get('confidence', 0.7)
                     )
                 )
                 print(f"DEBUG: Created checkpoint {checkpoint_id} for cluster {cluster_id}")
+                
+                # Add the ID to the access point
+                ap['id'] = checkpoint_id
             
             return access_points
         
