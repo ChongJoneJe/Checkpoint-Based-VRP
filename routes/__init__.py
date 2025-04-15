@@ -17,6 +17,7 @@ def setup_routes(app):
     from routes.vrp import vrp_bp
     from routes.debug import debug_bp
     from routes.checkpoints import checkpoints_bp
+    from routes.vrp_testing import vrp_testing_bp
     
     # Register blueprints with consistent URL prefixes
     app.register_blueprint(main_bp)
@@ -26,3 +27,4 @@ def setup_routes(app):
     app.register_blueprint(vrp_bp, url_prefix='/vrp')
     app.register_blueprint(debug_bp)
     app.register_blueprint(checkpoints_bp, url_prefix='/checkpoint')
+    app.register_blueprint(vrp_testing_bp)

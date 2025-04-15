@@ -65,14 +65,9 @@ function loadSelectedPreset() {
 function initializeMap() {
     // Create map centered on warehouse if available, otherwise use default center
     const center = currentPreset && currentPreset.warehouse ? 
-        currentPreset.warehouse : [0, 0];
+        currentPreset.warehouse : [3.1390, 101.6869];
     
-    map = L.map('map').setView(center, 13);
-    
-    // Add the tile layer (OpenStreetMap)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
+    map = Utils.createMap('map', center, 13);
 }
 
 /**
@@ -80,27 +75,15 @@ function initializeMap() {
  */
 function updateMapWithPreset() {
     // Clear existing markers
-    if (warehouseMarker) {
-        map.removeLayer(warehouseMarker);
-    }
-    
-    destinationMarkers.forEach(marker => map.removeLayer(marker));
+    Utils.clearMapLayers(map);
+    warehouseMarker = null;
     destinationMarkers = [];
-    
-    if (routeLayer) {
-        map.removeLayer(routeLayer);
-        routeLayer = null;
-    }
+    routeLayer = null;
     
     // Add warehouse marker
     const [wLat, wLng] = currentPreset.warehouse;
     warehouseMarker = L.marker([wLat, wLng], {
-        icon: L.divIcon({
-            className: 'warehouse-marker',
-            html: '<div class="warehouse-icon"></div>',
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-        })
+        icon: Utils.createMarkerIcon('warehouse')
     }).addTo(map);
     warehouseMarker.bindPopup(`Warehouse<br>${wLat.toFixed(6)}, ${wLng.toFixed(6)}`);
     
@@ -108,12 +91,7 @@ function updateMapWithPreset() {
     currentPreset.destinations.forEach((coords, index) => {
         const [lat, lng] = coords;
         const marker = L.marker([lat, lng], {
-            icon: L.divIcon({
-                className: 'destination-marker',
-                html: `<div class="destination-icon">${index + 1}</div>`,
-                iconSize: [22, 22],
-                iconAnchor: [11, 11]
-            })
+            icon: Utils.createMarkerIcon('destination', { number: index + 1 })
         }).addTo(map);
         
         marker.bindPopup(`Destination ${index + 1}<br>${lat.toFixed(6)}, ${lng.toFixed(6)}`);

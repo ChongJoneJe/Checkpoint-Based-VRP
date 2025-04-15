@@ -261,45 +261,35 @@ class GeoDBSCAN:
                 )
                 return location_id, cluster_id, False
             
-            # Level 2: Match based on street stem (without the last character)
+            # Level 2: Match based on street stem
             street_stem = self._get_street_stem(self._normalize_street_name(street))
-            
-            # Only proceed if this street follows the Malaysian pattern (has a letter suffix)
-            if street_stem != self._normalize_street_name(street):  
+
+            if street_stem != self._normalize_street_name(street):
                 print(f"DEBUG: Looking for stem matches with '{street_stem}'")
                 
-                stem_matches = execute_read(
+                # Direct query to the patterns table
+                pattern_match = execute_read(
                     """
-                    SELECT l.id, l.street, lc.cluster_id, c.name as cluster_name
-                    FROM locations l
-                    JOIN location_clusters lc ON l.id = lc.location_id
-                    JOIN clusters c ON lc.cluster_id = c.id
-                    WHERE l.street IS NOT NULL AND l.street != ''
-                    AND l.id != ?
-                    LIMIT 50
+                    SELECT sp.cluster_id, c.name as cluster_name
+                    FROM street_patterns sp
+                    JOIN clusters c ON sp.cluster_id = c.id
+                    WHERE sp.stem_pattern = ?
+                    LIMIT 1
                     """,
-                    (location_id,)
+                    (street_stem,),
+                    one=True
                 )
                 
-                if stem_matches:
-                    for loc in stem_matches:
-                        other_street = loc['street']
-                        other_normalized = self._normalize_street_name(other_street)
-                        other_stem = self._get_street_stem(other_normalized)
-                        
-                        print(f"DEBUG: Comparing stems: '{street_stem}' vs '{other_stem}'")
-                        
-                        # Only match stems if they both follow the pattern and match
-                        if (other_stem != other_normalized and 
-                            other_stem == street_stem):
-                            cluster_id = loc['cluster_id']
-                            print(f"Level 2 Match: Street stem match '{street_stem}' with '{other_street}'")
-                            # Assign to this cluster
-                            execute_write(
-                                "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
-                                (location_id, cluster_id)
-                            )
-                            return location_id, cluster_id, False
+                if pattern_match:
+                    cluster_id = pattern_match['cluster_id']
+                    print(f"Level 2 Match: Street stem '{street_stem}' matches existing pattern in cluster '{pattern_match['cluster_name']}'")
+                    
+                    # Assign to this cluster
+                    execute_write(
+                        "INSERT OR REPLACE INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
+                        (location_id, cluster_id)
+                    )
+                    return location_id, cluster_id, False
             
             # No matches found - create a new cluster based on street stem
             print(f"DEBUG: No matching cluster found, creating new cluster")
@@ -336,6 +326,11 @@ class GeoDBSCAN:
             execute_write(
                 "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
                 (location_id, cluster_id)
+            )
+
+            execute_write(
+                "INSERT INTO street_patterns (stem_pattern, cluster_id) VALUES (?, ?)",
+                (street_stem, cluster_id)
             )
             
             print(f"DEBUG: Created new cluster '{cluster_name}' (ID: {cluster_id}) for location {location_id}")
@@ -538,29 +533,6 @@ class GeoDBSCAN:
         
         print("\n====== END CLUSTERING DEBUG REPORT ======\n")
 
-    def _normalize_street_for_clustering(self, street):
-        """
-        Normalize a street name for clustering by removing the last character identifier after '/'
-        Example: 'jalan setia nusantara u13/22t' -> 'jalan setia nusantara u13/22'
-        
-        Args:
-            cluster_id: ID of the cluster
-            
-        Returns:
-            str: Normalized street name
-        """
-        if not street:
-            return ""
-        
-        # Check if there's a slash pattern with a character at the end
-        match = re.search(r'(.+/\d+)[a-zA-Z]$', street)
-        if match:
-            # Return everything except the last character
-            return match.group(1)
-        
-        # No modification needed
-        return street
-
     def _normalize_street_name(self, street):
         """
         Normalize a street name for comparison by:
@@ -604,46 +576,6 @@ class GeoDBSCAN:
         s = re.sub(r'\s+', ' ', s).strip()
         
         return s
-
-    def _streets_have_similarity(self, street1, street2):
-        """
-        Check if two streets have some similarity beyond exact matching.
-        This helps with clustering similar street patterns.
-        
-        Args:
-            street1 (str): First street name
-            street2 (str): Second street name
-            
-        Returns:
-            bool: True if streets are similar
-        """
-        if not street1 or not street2:
-            return False
-        
-        # Extract development patterns from both
-        pattern1 = self._extract_development_pattern(street1, '')
-        pattern2 = self._extract_development_pattern(street2, '')
-        
-        # If they share the same development pattern, they're similar
-        if pattern1 and pattern1 == pattern2:
-            return True
-        
-        # Extract section identifiers
-        section1, subsection1 = self._extract_section_identifier(street1)
-        section2, subsection2 = self._extract_section_identifier(street2)
-        
-        # If they're in the same section, they're similar
-        if section1 and section1 == section2:
-            return True
-        
-        # If normalized versions match, they're similar
-        norm1 = self._normalize_street_for_clustering(street1)
-        norm2 = self._normalize_street_for_clustering(street2)
-        
-        if norm1 and norm1 == norm2:
-            return True
-        
-        return False
 
     def _compare_street_paths(self, street1, street2):
         """
@@ -715,15 +647,15 @@ class GeoDBSCAN:
         return False
 
     def _get_street_stem(self, street):
-        """Get the street stem by removing the last character if it follows the Malaysian address pattern"""
         if not street:
             return ""
         
-        # Regex: Matches if string ends with '/' + digits + exactly one letter
-        match = re.search(r'/\d+[a-zA-Z]$', street)
+        # Handles both "jalan setia u13/29b" → "jalan setia u13/29"
+        # and just "/29b" → "/29"
+        match = re.search(r'(.+/\d+)[a-zA-Z]$', street)
         if match:
-            return street[:-1]  # Return string excluding last char
-        return street  # Return original if pattern doesn't match
+            return match.group(1)
+        return street
 
     def _extract_section_identifier(self, street):
         """
@@ -825,31 +757,6 @@ class GeoDBSCAN:
         
         # No clear development pattern found
         return None
-
-    def _format_street_with_section(self, street, section, subsection):
-        """
-        Format a street name with section and subsection consistently
-        
-        Args:
-            street (str): Original street name
-            section (str): Section identifier (e.g., "U13")
-            subsection (str): Subsection identifier (e.g., "21")
-            
-        Returns:
-            str: Formatted street name
-        """
-        # Remove section/subsection if it appears in a different format
-        pattern = fr"{section}[\\\/\s]*{subsection}"
-        clean_street = re.sub(pattern, "", street, flags=re.IGNORECASE).strip()
-        
-        # Remove trailing spaces and punctuation
-        clean_street = re.sub(r'[\s,.-]+$', '', clean_street)
-        
-        # Add properly formatted section/subsection
-        if clean_street:
-            return f"{clean_street} {section}/{subsection}"
-        else:
-            return f"Jalan {section}/{subsection}"
 
     def _cleanup_geocoded_address(self, address):
         """
@@ -1137,35 +1044,6 @@ class GeoDBSCAN:
             'suggested_values': suggested_values
         }
 
-    def debug_extraction(self, street):
-        """
-        Debug helper for street pattern extraction
-        
-        Args:
-            street (str): Street name to debug
-        """
-        print(f"\n=== DEBUGGING STREET: '{street}' ===")
-        
-        # Test development pattern extraction
-        dev = self._extract_development_pattern(street, '')
-        print(f"Development pattern: '{dev}'")
-        
-        # Test section extraction
-        sec, subsec = self._extract_section_identifier(street)
-        print(f"Section: '{sec}', Subsection: '{subsec}'")
-        
-        # Test cleanup
-        address = {'street': street}
-        cleaned = self._cleanup_geocoded_address(address)
-        print(f"Cleaned street: '{cleaned['street']}'")
-        
-        # Test address formatting
-        if sec and subsec:
-            formatted = self._format_street_with_section(street, sec, subsec)
-            print(f"Formatted street: '{formatted}'")
-        
-        print("===================================\n")
-
     def _extract_street_parts(self, street):
         """
         Extract components from street name with improved pattern recognition.
@@ -1236,38 +1114,6 @@ class GeoDBSCAN:
             'subsection': subsection,
             'block': block
         }
-
-    def clean_existing_locations(self):
-        """
-        Clean up any existing locations in the database to fix stray letters
-        """
-        print("DEBUG: Starting cleanup of existing location street names")
-        
-        # Get all locations with street names
-        locations = execute_read(
-            "SELECT id, street FROM locations WHERE street IS NOT NULL AND street != ''"
-        )
-        
-        updated = 0
-        for loc in locations:
-            location_id = loc['id']
-            original_street = loc['street']
-            
-            # Apply the same cleanup
-            cleaned = self._cleanup_geocoded_address({'street': original_street})
-            clean_street = cleaned['street']
-            
-            if clean_street != original_street:
-                # Update the database
-                execute_write(
-                    "UPDATE locations SET street = ? WHERE id = ?",
-                    (clean_street, location_id)
-                )
-                updated += 1
-                print(f"DEBUG: Updated location {location_id}: '{original_street}' → '{clean_street}'")
-        
-        print(f"DEBUG: Cleaned {updated} location street names in database")
-        return updated
     
     def identify_cluster_access_points(self, cluster_id, regenerate=True):
         """

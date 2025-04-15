@@ -375,13 +375,9 @@ const CheckpointManager = (function() {
                 // Create marker with numbered label
                 try {
                     const marker = L.marker([cp.lat, cp.lon], {
-                        icon: L.divIcon({
-                            className: 'checkpoint-marker',
-                            html: `<div class="checkpoint-icon" style="background-color: ${color};">
-                                    <div class="checkpoint-number">${checkpointNumber}</div>
-                                  </div>`,
-                            iconSize: [30, 30],
-                            iconAnchor: [15, 15]
+                        icon: Utils.createMarkerIcon('checkpoint', {
+                            number: checkpointNumber,
+                            color: color
                         }),
                         draggable: _editMode
                     }).addTo(_map);

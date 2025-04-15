@@ -1,7 +1,7 @@
 import uuid
 import os
 from datetime import datetime
-from utils.database import execute_read, execute_write
+from utils.database import execute_read, execute_write, get_db_connection
 from repositories.cluster_repository import ClusterRepository
 from repositories.location_repository import LocationRepository
 from algorithms.dbscan import GeoDBSCAN
@@ -77,7 +77,7 @@ class LocationService:
             )
             
             # Add development to address
-            wh_address['development'] = development.title()
+            wh_address['development'] = development.title() if development is not None else ""
             
             # Process warehouse
             if not wh_address:
@@ -157,6 +157,10 @@ class LocationService:
                         "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 0)",
                         (preset_id, dest_loc_id)
                     )
+                    
+                    # Add explicit commit after each location to make it visible for stem matching
+                    get_db_connection().commit()
+                    print(f"DEBUG: Committed location {dest_loc_id} to database")
                     
                     if is_new_cluster:
                         print(f"DEBUG: Created new cluster for destination {dest_loc_id}")

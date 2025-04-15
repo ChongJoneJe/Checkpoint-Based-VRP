@@ -65,28 +65,6 @@ CREATE TABLE IF NOT EXISTS warehouses (
     FOREIGN KEY (location_id) REFERENCES locations(id)
 );
 
--- Intersections table (for storing road transitions)
-CREATE TABLE IF NOT EXISTS intersections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lat REAL NOT NULL,
-    lon REAL NOT NULL,
-    from_road_type TEXT,
-    to_road_type TEXT,
-    description TEXT,
-    is_checkpoint BOOLEAN DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Location intersections link table
-CREATE TABLE IF NOT EXISTS location_intersections (
-    location_id INTEGER,
-    intersection_id INTEGER,
-    position INTEGER,
-    PRIMARY KEY (location_id, intersection_id),
-    FOREIGN KEY (location_id) REFERENCES locations(id),
-    FOREIGN KEY (intersection_id) REFERENCES intersections(id)
-);
-
 CREATE TABLE IF NOT EXISTS security_checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cluster_id INTEGER NOT NULL,
@@ -94,6 +72,8 @@ CREATE TABLE IF NOT EXISTS security_checkpoints (
     lon REAL NOT NULL,
     from_road_type TEXT,
     to_road_type TEXT,
+    checkpoint_type TEXT DEFAULT 'BOTH',  -- 'ENTRY', 'EXIT', or 'BOTH'
+    priority INTEGER DEFAULT 1,  -- Higher numbers = higher priority
     confidence REAL DEFAULT 0.7,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cluster_id) REFERENCES clusters(id) ON DELETE CASCADE
@@ -104,4 +84,15 @@ CREATE TABLE IF NOT EXISTS route_cache (
     route_data TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS street_patterns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stem_pattern TEXT NOT NULL,
+    cluster_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(stem_pattern, cluster_id),
+    FOREIGN KEY (cluster_id) REFERENCES clusters(id)
+);
+
+CREATE INDEX idx_street_patterns_stem ON street_patterns(stem_pattern);
 """

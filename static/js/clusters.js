@@ -26,33 +26,32 @@ const ClusterManager = (function() {
         return clusterColors[index];
     }
 
-    // Initialize the map
+    // Initialize the map - refactored to use Utils
     function initializeMap() {
-        // Check if map element exists
-        const mapElement = document.getElementById('map');
-        if (!mapElement) {
-            Utils.debugLog("Map element not found!");
-            return null;
+        // Create map with global name "clusterMap" for checkpoint use
+        try {
+            map = Utils.createMap('map', [3.1390, 101.6869], 13, { 
+                globalName: 'clusterMap' 
+            });
+            
+            if (!map) {
+                console.error("Failed to initialize map");
+                return null;
+            }
+            
+            // Ensure global reference is set
+            window.clusterMap = map;
+            return map;
+        } catch (e) {
+            console.error("Error initializing map:", e);
+            // Fallback to original implementation if Utils.createMap fails
+            map = L.map('map').setView([3.1390, 101.6869], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+            window.clusterMap = map;
+            return map;
         }
-        
-        // CRITICAL FIX: Check if map is already initialized to prevent double init
-        if (mapElement._leaflet_id) {
-            Utils.debugLog("Map already initialized, reusing existing map");
-            return L.map.getMap(mapElement);
-        }
-        
-        Utils.debugLog("Initializing map");
-        map = L.map('map').setView([3.1390, 101.6869], 13);
-        
-        // Add OpenStreetMap tiles
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        }).addTo(map);
-        
-        // Make map globally available (IMPORTANT)
-        window.clusterMap = map;
-        
-        return map;
     }
 
     // Load clusters for a preset

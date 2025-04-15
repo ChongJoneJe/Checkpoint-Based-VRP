@@ -12,7 +12,11 @@ def create_app():
     ensure_db_exists()
     
     # Configure SQLAlchemy (we'll keep it for read operations)
-    app.config['ORS_API_KEY'] = '5b3ce3597851110001cf62481caff684775f4567ac619c56d44d6f05'
+    ors_api_key = '5b3ce3597851110001cf62481caff684775f4567ac619c56d44d6f05'
+    app.config['ORS_API_KEY'] = ors_api_key
+    os.environ['ORS_API_KEY'] = ors_api_key
+
+    
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///static/data/locations.db'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {

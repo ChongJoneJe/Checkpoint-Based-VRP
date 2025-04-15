@@ -5,6 +5,31 @@ import os
 import random
 import math
 from config import DEFAULT_VEHICLE
+import time
+from algorithms.tsp import TravellingSalesmanProblem
+
+# ADD: Import OR-Tools if available
+try:
+    from ortools.constraint_solver import routing_enums_pb2
+    from ortools.constraint_solver import pywrapcp
+    HAS_ORTOOLS = True
+except ImportError:
+    HAS_ORTOOLS = False
+    print("WARNING: Google OR-Tools not installed. OR-Tools algorithm will not be available for static VRP.")
+    # Define dummy classes/enums if OR-Tools is not installed to avoid NameErrors later
+    class routing_enums_pb2:
+        class FirstSolutionStrategy:
+            PATH_CHEAPEST_ARC = None
+        class LocalSearchMetaheuristic:
+            GUIDED_LOCAL_SEARCH = None
+    class pywrapcp:
+        @staticmethod
+        def RoutingIndexManager(*args, **kwargs): return None
+        @staticmethod
+        def RoutingModel(*args, **kwargs): return None
+        @staticmethod
+        def DefaultRoutingSearchParameters(): return None
+
 
 class VehicleRoutingProblem:
     """
@@ -12,20 +37,24 @@ class VehicleRoutingProblem:
     and back to the warehouse, optimizing for distance.
     """
     
-    def __init__(self, warehouse_coords, destination_coords, num_vehicles=1, api_key=None):
+    def __init__(self, warehouse, destinations, num_vehicles=1, api_key=None):
         """
-        Initialize the VRP solver
+        Initialize VRP instance
         
         Args:
-            warehouse_coords (list): [lat, lon] of the warehouse
-            destination_coords (list): List of [lat, lon] coordinates for destinations
-            num_vehicles (int): Number of vehicles available
-            api_key (str): OpenRouteService API key (optional)
+            warehouse: [lat, lon] coordinates of the warehouse
+            destinations: List of [lat, lon] coordinates for delivery destinations
+            num_vehicles: Number of vehicles to use
+            api_key: OpenRouteService API key (optional)
         """
-        self.warehouse = warehouse_coords
-        self.destinations = destination_coords
-        self.num_vehicles = num_vehicles
-        self.api_key = api_key or os.environ.get('ORS_API_KEY')
+        self.warehouse = warehouse
+        self.destinations = destinations
+        self.num_vehicles = min(num_vehicles, len(destinations))
+        self.api_key = api_key
+        self.using_road_network = False 
+        
+        self.checkpoints = []  # Will be populated if needed
+        
         self.client = None
         
         # Create distance matrix
@@ -33,20 +62,14 @@ class VehicleRoutingProblem:
     
     def _calculate_distance_matrix(self):
         """
-        Calculate the distance matrix between all points using either API or Euclidean distance
-        
-        Returns:
-            numpy.ndarray: Distance matrix with warehouse as first point
+        Calculate distance matrix between all locations
         """
-        # If API key is available, use OpenRouteService for real routes
         if self.api_key:
             try:
                 client = openrouteservice.Client(key=self.api_key)
                 
-                # Combine warehouse and destinations
+                # Format coordinates for ORS (lon, lat)
                 all_coords = [self.warehouse] + self.destinations
-                
-                # Format for ORS (lon, lat)
                 ors_coords = [[point[1], point[0]] for point in all_coords]
                 
                 # Request distance matrix
@@ -57,12 +80,16 @@ class VehicleRoutingProblem:
                     units='km'
                 )
                 
+                # Successfully used road network
+                self.using_road_network = True
+                
                 # Convert to numpy array and return
                 return np.array(matrix['distances'])
-                
+                    
             except Exception as e:
                 print(f"OpenRouteService API error: {str(e)}")
                 print("Falling back to Euclidean distance")
+                self.using_road_network = False
         
         # Fall back to Euclidean distance calculation
         all_coords = [self.warehouse] + self.destinations
@@ -95,33 +122,93 @@ class VehicleRoutingProblem:
         
         return R * c  # Distance in kilometers
     
-    def solve(self, algorithm="nearest_neighbor"):
+    def _compute_distance_matrix(self, locations):
         """
-        Solve the VRP problem using the specified algorithm
+        Calculate distance matrix for a given set of locations
         
         Args:
-            algorithm (str): The algorithm to use ("nearest_neighbor", "two_opt", or "checkpoints")
-            
-        Returns:
-            dict: Solution containing routes and total distance
-        """
-        if algorithm == "nearest_neighbor":
-            return self._solve_nearest_neighbor()
-        elif algorithm == "two_opt":
-            nn_solution = self._solve_nearest_neighbor()
-            return self._improve_with_two_opt(nn_solution)
-        elif algorithm == "checkpoints":
-            return self.solve_with_checkpoints()
-        else:
-            raise ValueError(f"Unknown algorithm: {algorithm}")
-    
-    def _solve_nearest_neighbor(self):
-        """
-        Solve using the Nearest Neighbor algorithm
+            locations: List of [lat, lon] coordinates
         
         Returns:
-            dict: Solution with routes and total distance
+            numpy.ndarray: Distance matrix
         """
+        n = len(locations)
+        matrix = np.zeros((n, n))
+        
+        # Try to use OpenRouteService if API key is available
+        if self.api_key:
+            try:
+                client = openrouteservice.Client(key=self.api_key)
+                
+                # Format for ORS (lon, lat)
+                ors_coords = [[point[1], point[0]] for point in locations]
+                
+                # Request distance matrix
+                result = client.distance_matrix(
+                    locations=ors_coords,
+                    profile='driving-car',
+                    metrics=['distance'],
+                    units='km'
+                )
+                
+                # Convert to numpy array and return
+                return np.array(result['distances'])
+                    
+            except Exception as e:
+                print(f"OpenRouteService API error: {str(e)}")
+                print("Falling back to Euclidean distance")
+        
+        # Fall back to Euclidean distance calculation
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    lat1, lon1 = locations[i]
+                    lat2, lon2 = locations[j]
+                    matrix[i, j] = self._haversine_distance(lat1, lon1, lat2, lon2)
+        
+        return matrix
+
+    def solve(self, algorithm="nearest_neighbor"):
+        """
+        Solve the VRP problem using the specified algorithm.
+
+        Args:
+            algorithm (str): Algorithm: "nearest_neighbor", "two_opt", "or_tools".
+
+        Returns:
+            dict: Solution containing routes and total distance.
+        """
+        print(f"[DEBUG VRP] Solving static VRP with algorithm: {algorithm}")
+        start_time = time.time()
+
+        if algorithm == "nearest_neighbor":
+            solution = self._solve_nearest_neighbor()
+        elif algorithm == "two_opt":
+            print("[DEBUG VRP] Running Nearest Neighbor as base for 2-Opt...")
+            nn_solution = self._solve_nearest_neighbor()
+            print("[DEBUG VRP] Improving NN solution with 2-Opt...")
+            solution = self._improve_with_two_opt(nn_solution)
+        elif algorithm == "or_tools":
+            if not HAS_ORTOOLS:
+                print("[ERROR VRP] OR-Tools selected but library not found. Falling back to two_opt.")
+                # Fallback to two_opt if OR-Tools isn't available
+                nn_solution = self._solve_nearest_neighbor()
+                solution = self._improve_with_two_opt(nn_solution)
+            else:
+                print("[DEBUG VRP] Solving static VRP with OR-Tools...")
+                solution = self._solve_static_vrp_ortools()
+        else:
+            print(f"[ERROR VRP] Unknown algorithm: {algorithm}. Falling back to nearest_neighbor.")
+            solution = self._solve_nearest_neighbor()
+
+        computation_time = time.time() - start_time
+        solution['computation_time'] = computation_time
+        print(f"[DEBUG VRP] Static VRP ({algorithm}) solved in {computation_time:.4f} seconds.")
+        return solution
+
+    def _solve_nearest_neighbor(self):
+        """Solve using the Nearest Neighbor algorithm."""
+        print("[DEBUG VRP NN] Starting Nearest Neighbor calculation...")
         # Number of destinations
         n_destinations = len(self.destinations)
         
@@ -170,18 +257,12 @@ class VehicleRoutingProblem:
             routes.append(route)
             total_distance += route["distance"]
         
+        print(f"[DEBUG VRP NN] Nearest Neighbor finished. Total distance: {total_distance:.2f}")
         return {"routes": routes, "total_distance": total_distance}
-    
+
     def _improve_with_two_opt(self, initial_solution):
-        """
-        Improve a solution using 2-opt local search
-        
-        Args:
-            initial_solution (dict): Initial solution to improve
-            
-        Returns:
-            dict: Improved solution
-        """
+        """Improve a solution using 2-opt local search."""
+        print("[DEBUG VRP 2Opt] Starting 2-Opt improvement...")
         improved_solution = {"routes": [], "total_distance": 0}
         
         for route in initial_solution["routes"]:
@@ -224,8 +305,98 @@ class VehicleRoutingProblem:
             improved_solution["routes"].append(improved_route)
             improved_solution["total_distance"] += improved_route["distance"]
         
+        print(f"[DEBUG VRP 2Opt] 2-Opt finished. Improved distance: {improved_solution['total_distance']:.2f}")
         return improved_solution
-    
+
+    def _solve_static_vrp_ortools(self):
+        """Solve static VRP using Google OR-Tools."""
+        if not HAS_ORTOOLS:
+             # This case is handled in solve(), but added for safety
+            print("[ERROR VRP ORTools] OR-Tools library not available.")
+            return {"routes": [], "total_distance": 0, "error": "OR-Tools library not installed"}
+
+        print("[DEBUG VRP ORTools] Preparing data model for static OR-Tools...")
+        data = {}
+        data['distance_matrix'] = self.distance_matrix.tolist() # Use pre-calculated matrix
+        data['num_vehicles'] = self.num_vehicles
+        data['depot'] = 0 # Warehouse is index 0
+
+        if not data['distance_matrix']:
+             print("[ERROR VRP ORTools] Distance matrix is empty.")
+             return {"routes": [], "total_distance": 0, "error": "Distance matrix is empty"}
+
+        num_locations = len(data['distance_matrix'])
+        if num_locations <= 1: # Only warehouse
+             return {"routes": [], "total_distance": 0}
+
+        print(f"[DEBUG VRP ORTools] Num locations: {num_locations}, Num vehicles: {data['num_vehicles']}")
+
+        try:
+            manager = pywrapcp.RoutingIndexManager(num_locations, data['num_vehicles'], data['depot'])
+            routing = pywrapcp.RoutingModel(manager)
+
+            def distance_callback(from_index, to_index):
+                from_node = manager.IndexToNode(from_index)
+                to_node = manager.IndexToNode(to_index)
+                # Ensure indices are within bounds
+                if 0 <= from_node < len(data['distance_matrix']) and 0 <= to_node < len(data['distance_matrix']):
+                     # OR-Tools expects integer distances, multiply by 1000 and cast
+                     return int(data['distance_matrix'][from_node][to_node] * 1000)
+                else:
+                     print(f"[ERROR VRP ORTools] Invalid node index in distance_callback: from={from_node}, to={to_node}")
+                     return 999999999 # Return a large penalty for invalid indices
+
+            transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+            routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+            search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+            search_parameters.first_solution_strategy = (
+                routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+            )
+            search_parameters.local_search_metaheuristic = (
+                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+            )
+            search_parameters.time_limit.seconds = 10 # Increased time limit for potentially larger static problems
+
+            print("[DEBUG VRP ORTools] Starting solver...")
+            assignment = routing.SolveWithParameters(search_parameters)
+
+            if not assignment:
+                print("[ERROR VRP ORTools] Solver failed to find a solution.")
+                return {"routes": [], "total_distance": 0, "error": "OR-Tools solver failed"}
+
+            print("[DEBUG VRP ORTools] Solver finished. Extracting solution...")
+            final_routes = []
+            total_distance = 0
+            for vehicle_id in range(data['num_vehicles']):
+                index = routing.Start(vehicle_id)
+                route_nodes = []
+                route_distance_m = 0 # Distance in meters (scaled by 1000)
+                while not routing.IsEnd(index):
+                    node_index = manager.IndexToNode(index)
+                    if node_index != data['depot']: # Exclude depot from stops list
+                        route_nodes.append(node_index - 1) # Convert back to 0-based destination index
+                    previous_index = index
+                    index = assignment.Value(routing.NextVar(index))
+                    route_distance_m += routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+
+                if route_nodes: # Only add routes that visit at least one destination
+                    route_distance_km = route_distance_m / 1000.0 # Convert back to km
+                    final_routes.append({
+                        'stops': route_nodes,
+                        'distance': route_distance_km
+                    })
+                    total_distance += route_distance_km
+
+            print(f"[DEBUG VRP ORTools] Extracted {len(final_routes)} routes. Total distance: {total_distance:.2f} km")
+            return {"routes": final_routes, "total_distance": total_distance}
+
+        except Exception as e:
+            print(f"[ERROR VRP ORTools] Exception during OR-Tools solving: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"routes": [], "total_distance": 0, "error": f"OR-Tools exception: {e}"}
+
     def _calculate_route_distance(self, route):
         """
         Calculate the total distance of a route
@@ -240,148 +411,3 @@ class VehicleRoutingProblem:
         for i in range(len(route) - 1):
             distance += self.distance_matrix[route[i]][route[i+1]]
         return distance
-    
-    def solve_with_checkpoints(self):
-        """
-        Optimized VRP solver using security checkpoints to minimize route calculations
-        """
-        # Get clusters and their checkpoints from database
-        clusters_with_checkpoints = self._get_clusters_with_checkpoints()
-        
-        # Group destinations by cluster
-        destinations_by_cluster = self._group_destinations_by_cluster()
-        
-        # Calculate only necessary routes (warehouse→checkpoint, checkpoint→destinations)
-        optimized_routes = {}
-        
-        # 1. Calculate warehouse→checkpoint routes (once per cluster)
-        for cluster_id, checkpoint in clusters_with_checkpoints.items():
-            # Cache key for route
-            cache_key = f"wh_to_cp_{cluster_id}"
-            
-            # Get from cache or calculate
-            if cache_key in self._route_cache:
-                route = self._route_cache[cache_key]
-            else:
-                route = self._calculate_route(
-                    self.warehouse[0], self.warehouse[1],
-                    checkpoint['lat'], checkpoint['lon']
-                )
-                self._route_cache[cache_key] = route
-            
-            # Store route
-            optimized_routes[cluster_id] = {
-                'warehouse_to_checkpoint': route,
-                'checkpoint': checkpoint,
-                'destinations': []
-            }
-        
-        # 2. Calculate checkpoint→destination routes
-        for cluster_id, destinations in destinations_by_cluster.items():
-            if cluster_id not in clusters_with_checkpoints:
-                continue
-                
-            checkpoint = clusters_with_checkpoints[cluster_id]
-            
-            for i, dest in enumerate(destinations):
-                # Cache key for route
-                cache_key = f"cp_{cluster_id}_to_dest_{i}"
-                
-                # Get from cache or calculate
-                if cache_key in self._route_cache:
-                    route = self._route_cache[cache_key]
-                else:
-                    route = self._calculate_route(
-                        checkpoint['lat'], checkpoint['lon'],
-                        dest[0], dest[1]
-                    )
-                    self._route_cache[cache_key] = route
-                
-                # Add to optimized routes
-                optimized_routes[cluster_id]['destinations'].append({
-                    'index': i,
-                    'coords': dest,
-                    'route': route
-                })
-        
-        # 3. Solve the VRP within each cluster
-        solution = self._solve_with_checkpoints(optimized_routes)
-        
-        return solution
-    
-    def calculate_routes_through_checkpoints(self, warehouse, checkpoints, destinations):
-        """
-        Calculate optimized routes through security checkpoints
-        
-        Args:
-            warehouse: [lat, lon] of warehouse
-            checkpoints: Dict of {cluster_id: checkpoint_data}
-            destinations: Dict of {cluster_id: list of [lat, lon] destinations}
-            
-        Returns:
-            dict: Route information optimized through checkpoints
-        """
-        if not self.client:
-            self.client = openrouteservice.Client(key=self.api_key)
-        
-        route_data = {}
-        
-        # Initialize route cache for efficiency
-        if not hasattr(self, '_route_cache'):
-            self._route_cache = {}
-        
-        # For each cluster, calculate warehouse→checkpoint→destinations→checkpoint→warehouse
-        for cluster_id, checkpoint in checkpoints.items():
-            if cluster_id not in destinations:
-                continue
-                
-            # Step 1: Calculate warehouse to checkpoint (just once per cluster)
-            wh_to_cp_key = f"{warehouse[0]:.5f},{warehouse[1]:.5f}|{checkpoint['lat']:.5f},{checkpoint['lon']:.5f}"
-            
-            if wh_to_cp_key in self._route_cache:
-                wh_to_cp_route = self._route_cache[wh_to_cp_key]
-            else:
-                try:
-                    wh_to_cp_route = self.client.directions(
-                        coordinates=[[warehouse[1], warehouse[0]], [checkpoint['lon'], checkpoint['lat']]],
-                        profile='driving-car',
-                        format='geojson'
-                    )
-                    self._route_cache[wh_to_cp_key] = wh_to_cp_route
-                except Exception as e:
-                    print(f"Error calculating route warehouse→checkpoint: {str(e)}")
-                    wh_to_cp_route = None
-            
-            # Step 2: Calculate routes from checkpoint to each destination
-            cp_to_dests = []
-            
-            for dest in destinations[cluster_id]:
-                cp_to_dest_key = f"{checkpoint['lat']:.5f},{checkpoint['lon']:.5f}|{dest[0]:.5f},{dest[1]:.5f}"
-                
-                if cp_to_dest_key in self._route_cache:
-                    cp_to_dest_route = self._route_cache[cp_to_dest_key]
-                else:
-                    try:
-                        cp_to_dest_route = self.client.directions(
-                            coordinates=[[checkpoint['lon'], checkpoint['lat']], [dest[1], dest[0]]],
-                            profile='driving-car',
-                            format='geojson'
-                        )
-                        self._route_cache[cp_to_dest_key] = cp_to_dest_route
-                    except Exception as e:
-                        print(f"Error calculating route checkpoint→destination: {str(e)}")
-                        cp_to_dest_route = None
-                
-                cp_to_dests.append({
-                    'destination': dest,
-                    'route': cp_to_dest_route
-                })
-            
-            # Store all routes for this cluster
-            route_data[cluster_id] = {
-                'checkpoint': checkpoint,
-                'warehouse_to_checkpoint': wh_to_cp_route,
-                'checkpoint_to_destinations': cp_to_dests
-            }
-        
-        return route_data

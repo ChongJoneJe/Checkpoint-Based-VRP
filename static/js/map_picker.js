@@ -11,29 +11,23 @@ let destinationMarkers = [];
  * Initialize the map with given center coordinates
  */
 function initMap(lat, lng) {
-    map = L.map('map').setView([lat, lng], 13);
+    // Use the centralized map creation function
+    map = Utils.createMap('map', [lat, lng], 13);
+    if (!map) return;
     
-    // Add OpenStreetMap tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(map);
-    
-    // Add scale control
-    L.control.scale().addTo(map);
-    
-    // Setup event listeners for buttons
+    // Setup event listeners for buttons (keep this specific to map_picker)
     document.getElementById('warehouse-btn').addEventListener('click', () => setLocationMode('warehouse'));
     document.getElementById('destination-btn').addEventListener('click', () => setLocationMode('destination'));
     document.getElementById('clear-btn').addEventListener('click', clearSelections);
     document.getElementById('save-btn').addEventListener('click', function() {
         // Validate locations first
         if (!warehouseMarker) {
-            showNotification('Please select a warehouse location first');
+            Utils.showNotification('Please select a warehouse location first', 'error');
             return;
         }
         
         if (destinationMarkers.length === 0) {
-            showNotification('Please add at least one destination');
+            Utils.showNotification('Please add at least one destination', 'error');
             return;
         }
         
@@ -85,7 +79,7 @@ function handleMapClick(e) {
  * Verify location address
  */
 function verifyLocation(lat, lng, locationType) {
-    showNotification('Verifying location...', 'info');
+    Utils.showNotification('Verifying location...', 'info');
     
     return fetch(`/locations/verify_location?lat=${lat}&lng=${lng}`)
         .then(response => response.json())
@@ -100,7 +94,7 @@ function verifyLocation(lat, lng, locationType) {
         })
         .catch(error => {
             console.error('Error verifying location:', error);
-            showNotification('Error verifying location address', 'error');
+            Utils.showNotification('Error verifying location address', 'error');
             // Show address form even in case of error
             return showAddressModal(lat, lng, locationType, {});
         });
@@ -187,7 +181,7 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    showNotification(`Address saved successfully${data.cluster_name ? ` to cluster: ${data.cluster_name}` : ''}`, 'success');
+                    Utils.showNotification(`Address saved successfully${data.cluster_name ? ` to cluster: ${data.cluster_name}` : ''}`, 'success');
                     
                     // Create a complete address object to resolve the promise
                     const addressObject = {
@@ -205,7 +199,7 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                     // Resolve with the full address object
                     resolve(addressObject);
                 } else {
-                    showNotification('Error: ' + data.message, 'error');
+                    Utils.showNotification('Error: ' + data.message, 'error');
                     previewMap.remove();
                     resetAddressForm();
                     reject(new Error(data.message));
@@ -213,7 +207,7 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             })
             .catch(error => {
                 console.error('Error:', error);
-                showNotification('Error saving address: ' + error, 'error');
+                Utils.showNotification('Error saving address: ' + error, 'error');
                 previewMap.remove();
                 resetAddressForm();
                 reject(error);
@@ -287,11 +281,11 @@ function setWarehouse(lat, lng) {
             // Switch to destination mode after setting warehouse
             setLocationMode('destination');
             
-            showNotification('Warehouse location set!');
+            Utils.showNotification('Warehouse location set!');
         })
         .catch(error => {
             console.error('Error setting warehouse:', error);
-            showNotification('Failed to set warehouse location', 'error');
+            Utils.showNotification('Failed to set warehouse location', 'error');
         });
 }
 
@@ -339,11 +333,11 @@ function addDestination(lat, lng) {
             // Update destination list in sidebar
             updateDestinationsList();
             
-            showNotification('Destination added!');
+            Utils.showNotification('Destination added!');
         })
         .catch(error => {
             console.error('Error adding destination:', error);
-            showNotification('Failed to add destination', 'error');
+            Utils.showNotification('Failed to add destination', 'error');
         });
 }
 
@@ -421,7 +415,7 @@ function removeDestination(index) {
     // Update sidebar list
     updateDestinationsList();
     
-    showNotification('Destination removed');
+    Utils.showNotification('Destination removed');
 }
 
 /**
@@ -445,7 +439,7 @@ function clearSelections() {
         document.getElementById('warehouse-display').innerHTML = '';
         updateDestinationsList();
         
-        showNotification('All locations cleared');
+        Utils.showNotification('All locations cleared');
     }
 }
 
@@ -483,7 +477,7 @@ function saveLocations(presetName) {
     };
     
     // Show saving notification
-    showNotification('Saving locations...');
+    Utils.showNotification('Saving locations...');
     
     // Send to backend
     fetch('/locations/save_locations', {
@@ -496,14 +490,14 @@ function saveLocations(presetName) {
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            showNotification('Locations saved successfully!');
+            Utils.showNotification('Locations saved successfully!');
         } else {
-            showNotification('Error: ' + data.message);
+            Utils.showNotification('Error: ' + data.message);
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        showNotification('Failed to save locations');
+        Utils.showNotification('Failed to save locations');
     });
 }
 
@@ -567,12 +561,12 @@ function loadPresets() {
  */
 function savePreset() {
     if (!warehouse) {
-        showNotification('Please set a warehouse location first', 'error');
+        Utils.showNotification('Please set a warehouse location first', 'error');
         return;
     }
     
     if (destinations.length === 0) {
-        showNotification('Please add at least one destination', 'error');
+        Utils.showNotification('Please add at least one destination', 'error');
         return;
     }
     
@@ -580,7 +574,7 @@ function savePreset() {
     const presetName = presetNameInput.value.trim();
     
     if (!presetName) {
-        showNotification('Please enter a name for this preset', 'error');
+        Utils.showNotification('Please enter a name for this preset', 'error');
         return;
     }
     
@@ -601,16 +595,16 @@ function savePreset() {
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            showNotification(`Preset "${presetName}" saved successfully!`, 'success');
+            Utils.showNotification(`Preset "${presetName}" saved successfully!`, 'success');
             presetNameInput.value = '';
             loadPresets();  // Refresh the presets list
         } else {
-            showNotification('Error: ' + data.message, 'error');
+            Utils.showNotification('Error: ' + data.message, 'error');
         }
     })
     .catch(error => {
         console.error('Error saving preset:', error);
-        showNotification('Failed to save preset. Please try again.', 'error');
+        Utils.showNotification('Failed to save preset. Please try again.', 'error');
     });
 }
 
@@ -622,7 +616,7 @@ function applySelectedPreset() {
     const selectedOption = presetsList.options[presetsList.selectedIndex];
     
     if (!selectedOption || selectedOption.disabled) {
-        showNotification('Please select a valid preset', 'error');
+        Utils.showNotification('Please select a valid preset', 'error');
         return;
     }
     
@@ -649,14 +643,14 @@ function applySelectedPreset() {
                     });
                 }
                 
-                showNotification(`Preset "${data.preset.name}" loaded successfully`, 'success');
+                Utils.showNotification(`Preset "${data.preset.name}" loaded successfully`, 'success');
             } else {
-                showNotification('Error: ' + data.message, 'error');
+                Utils.showNotification('Error: ' + data.message, 'error');
             }
         })
         .catch(error => {
             console.error('Error applying preset:', error);
-            showNotification('Failed to apply preset', 'error');
+            Utils.showNotification('Failed to apply preset', 'error');
         });
 }
 
@@ -668,7 +662,7 @@ function deleteSelectedPreset() {
     const selectedOption = presetsList.options[presetsList.selectedIndex];
     
     if (!selectedOption || selectedOption.disabled) {
-        showNotification('Please select a valid preset', 'error');
+        Utils.showNotification('Please select a valid preset', 'error');
         return;
     }
     
@@ -682,15 +676,15 @@ function deleteSelectedPreset() {
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
-                showNotification(`Preset "${presetName}" deleted successfully`, 'success');
+                Utils.showNotification(`Preset "${presetName}" deleted successfully`, 'success');
                 loadPresets();  // Refresh the presets list
             } else {
-                showNotification('Error: ' + data.message, 'error');
+                Utils.showNotification('Error: ' + data.message, 'error');
             }
         })
         .catch(error => {
             console.error('Error deleting preset:', error);
-            showNotification('Failed to delete preset', 'error');
+            Utils.showNotification('Failed to delete preset', 'error');
         });
     }
 }
@@ -699,20 +693,7 @@ function deleteSelectedPreset() {
  * Show notification message
  */
 function showNotification(message, type = 'info') {
-    const notification = document.getElementById('notification');
-    const messageElement = document.getElementById('notification-message');
-    
-    // Set message and type
-    messageElement.textContent = message;
-    notification.className = `notification ${type}`;
-    
-    // Show notification
-    notification.classList.remove('hidden');
-    
-    // Hide after 3 seconds
-    setTimeout(() => {
-        notification.classList.add('hidden');
-    }, 3000);
+    Utils.showNotification(message, type);
 }
 
 function showNamePrompt() {
@@ -765,7 +746,7 @@ function confirmSaveWithName() {
 
 function cancelSave() {
     hideNamePrompt();
-    showNotification('Location saving canceled');
+    Utils.showNotification('Location saving canceled');
     setTimeout(hideNotification, 3000);
 }
 
@@ -777,7 +758,7 @@ function hideNamePrompt() {
 }
 
 function hideNotification() {
-    document.getElementById('notification').classList.add('hidden');
+    Utils.hideNotification();
 }
 
 /**
@@ -785,12 +766,12 @@ function hideNotification() {
  */
 function promptSaveLocations() {
     if (!warehouseMarker) {
-        showNotification('Please select a warehouse location first', 'error');
+        Utils.showNotification('Please select a warehouse location first', 'error');
         return;
     }
     
     if (destinationMarkers.length === 0) {
-        showNotification('Please add at least one destination', 'error');
+        Utils.showNotification('Please add at least one destination', 'error');
         return;
     }
     
@@ -798,7 +779,7 @@ function promptSaveLocations() {
     const presetName = prompt('Please enter a name for this preset:');
     
     if (!presetName || presetName.trim() === '') {
-        showNotification('Preset name is required', 'error');
+        Utils.showNotification('Preset name is required', 'error');
         return;
     }
     
@@ -825,13 +806,13 @@ function promptSaveLocations() {
         hideLoadingIndicator();
         
         if (data.status === 'success') {
-            showNotification('Locations saved successfully!', 'success');
+            Utils.showNotification('Locations saved successfully!', 'success');
             // Reload presets if you have a presets list
             if (typeof loadPresets === 'function') {
                 loadPresets();
             }
         } else {
-            showNotification('Error: ' + data.message, 'error');
+            Utils.showNotification('Error: ' + data.message, 'error');
         }
     })
     .catch(error => {
@@ -839,7 +820,7 @@ function promptSaveLocations() {
         hideLoadingIndicator();
         
         console.error('Error:', error);
-        showNotification('Failed to save locations', 'error');
+        Utils.showNotification('Failed to save locations', 'error');
     });
 }
 
@@ -847,76 +828,14 @@ function promptSaveLocations() {
  * Show loading indicator with progress
  */
 function showLoadingIndicator(totalLocations) {
-    // Create loading overlay if it doesn't exist
-    let loadingOverlay = document.getElementById('loading-overlay');
-    if (!loadingOverlay) {
-        loadingOverlay = document.createElement('div');
-        loadingOverlay.id = 'loading-overlay';
-        loadingOverlay.innerHTML = `
-            <div class="loading-container">
-                <div class="loading-spinner"></div>
-                <h3>Saving Locations</h3>
-                <div class="progress-container">
-                    <div id="loading-progress-bar" class="progress-bar"></div>
-                </div>
-                <div id="loading-message">Preparing to save...</div>
-            </div>
-        `;
-        document.body.appendChild(loadingOverlay);
-    }
-    
-    // Show the overlay
-    loadingOverlay.style.display = 'flex';
-    
-    // Reset progress bar
-    const progressBar = document.getElementById('loading-progress-bar');
-    progressBar.style.width = '0%';
-    
-    // Simulate progress based on number of locations
-    const loadingMessage = document.getElementById('loading-message');
-    const steps = [
-        { percent: 10, message: 'Initializing...' },
-        { percent: 20, message: 'Validating warehouse location...' },
-        { percent: 30, message: 'Processing destinations...' },
-        { percent: 50, message: 'Geocoding addresses...' },
-        { percent: 70, message: 'Identifying clusters...' },
-        { percent: 85, message: 'Finalizing...' },
-        { percent: 95, message: 'Saving to database...' }
-    ];
-    
-    // Add some randomness to make it feel more natural
-    const timePerStep = 300 + Math.random() * 200;
-    const totalTime = timePerStep * steps.length;
-    
-    // Update progress bar and message
-    steps.forEach((step, index) => {
-        setTimeout(() => {
-            if (loadingOverlay.style.display !== 'none') {
-                progressBar.style.width = step.percent + '%';
-                loadingMessage.textContent = step.message;
-            }
-        }, timePerStep * index);
-    });
+    return Utils.showLoadingIndicator('Saving Locations', true);
 }
 
 /**
  * Hide loading indicator
  */
 function hideLoadingIndicator() {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    if (loadingOverlay) {
-        // Complete the progress bar animation first
-        const progressBar = document.getElementById('loading-progress-bar');
-        const loadingMessage = document.getElementById('loading-message');
-        
-        progressBar.style.width = '100%';
-        loadingMessage.textContent = 'Complete!';
-        
-        // Hide after a short delay to show completion
-        setTimeout(() => {
-            loadingOverlay.style.display = 'none';
-        }, 500);
-    }
+    Utils.hideLoadingIndicator();
 }
 
 /**

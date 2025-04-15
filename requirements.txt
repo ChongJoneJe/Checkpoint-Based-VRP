@@ -8,3 +8,4 @@ scikit-learn 1.6.1
 geopy 2.4.1
 osmnx 2.0.2
 matpltlib 3.10.1
+ortools 9.12.4544
