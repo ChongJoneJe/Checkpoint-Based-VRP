@@ -108,8 +108,8 @@ def run_test():
     snapshot_id = data['snapshot_id']
     preset_id = data['preset_id']
     algorithm = data.get('algorithm', 'two_opt')  # Default to NN+2Opt
-    num_vehicles = int(data['num_vehicles'])
-    test_type = data['test_type']
+    num_vehicles = int(data.get('num_vehicles', 1))  # Ensure num_vehicles is extracted correctly
+    test_type = data.get('test_type', 'static')
     api_key = data.get('api_key') or current_app.config.get('ORS_API_KEY')
 
     try:
@@ -129,7 +129,7 @@ def run_test():
             solution = VRPService.solve_vrp(
                 warehouse=preset_data_basic['warehouse'],
                 destinations=preset_data_basic['destinations'],
-                num_vehicles=num_vehicles,
+                num_vehicles=num_vehicles,  # Pass num_vehicles
                 algorithm=algorithm,  # Pass the selected algorithm
                 api_key=api_key  # Pass API key here
             )
@@ -140,17 +140,32 @@ def run_test():
             prepared_data = VRPTestScenarioService.prepare_test_data(
                 snapshot_id, preset_id, api_key=api_key
             )
-            if not prepared_data or prepared_data.get('status') == 'error':
-                error_msg = prepared_data.get('message', 'Failed to prepare test data') if isinstance(prepared_data, dict) else 'Failed to prepare test data'
-                return jsonify({'status': 'error', 'message': error_msg})
+            
+            if not prepared_data:
+                return jsonify({
+                    'status': 'error', 
+                    'message': 'Failed to prepare test data - no data returned.'
+                })
+                
+            if prepared_data.get('status') == 'error':
+                return jsonify({
+                    'status': 'error',
+                    'message': prepared_data.get('message', 'Failed to prepare test data.')
+                })
+                
+            if not prepared_data.get('has_clusters', False):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Test data missing required cluster information. Try with a different preset or snapshot.'
+                })
 
-            # Add api_key to prepared_data if not already present, for EnhancedVRP
+            # Add api_key to prepared_data if not already present
             prepared_data['api_key'] = api_key
 
-            print(f"[DEBUG Route] Calling VRPTestScenarioService.run_checkpoint_vrp_scenario with algorithm: {algorithm}")
+            print(f"[DEBUG Route] Calling VRPTestScenarioService.run_checkpoint_vrp_scenario. Algorithm: {algorithm}, Vehicles: {num_vehicles}")
             solution = VRPTestScenarioService.run_checkpoint_vrp_scenario(
                 prepared_data,
-                num_vehicles=num_vehicles,
+                num_vehicles=num_vehicles,  # Pass num_vehicles
                 algorithm=algorithm  # Pass 'two_opt' or 'or_tools'
             )
 
@@ -161,7 +176,7 @@ def run_test():
             'snapshot_id': snapshot_id,
             'preset_id': preset_id,
             'algorithm': algorithm,  # Store the algorithm requested by the user
-            'num_vehicles': num_vehicles,
+            'num_vehicles': num_vehicles,  # Store the requested number
             'test_type': test_type,
             'timestamp': datetime.now().isoformat(),
             'distance_type': solution.get('distance_type', 'unknown'),

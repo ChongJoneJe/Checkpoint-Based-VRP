@@ -5,9 +5,73 @@ import sqlite3
 from flask import current_app
 import os
 from functools import wraps
+import threading
 
 class CacheService:
-    """Centralized caching service for the application"""
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        # Implement Singleton pattern to ensure one cache instance
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(CacheService, cls).__new__(cls)
+                # Initialize cache storage only once
+                cls._instance._cache = {}
+                cls._instance._expirations = {}
+                print("[DEBUG CacheService] Initialized Singleton in-memory cache.")
+        return cls._instance
+
+    def get(self, key):
+        """Retrieve an item from the cache if it exists and hasn't expired."""
+        with self._lock: # Ensure thread safety
+            if key in self._cache:
+                if key in self._expirations and time.time() > self._expirations[key]:
+                    print(f"[DEBUG CacheService] Cache expired for key: {key}")
+                    # Item expired, remove it
+                    del self._cache[key]
+                    del self._expirations[key]
+                    return None # Indicate cache miss (expired)
+                else:
+                    print(f"[DEBUG CacheService] Cache hit for key: {key}")
+                    # Return a copy to prevent external modification of cached object?
+                    # For numpy arrays, maybe return self._cache[key].copy() if needed
+                    return self._cache[key] # Return cached item
+            else:
+                print(f"[DEBUG CacheService] Cache miss for key: {key}")
+                return None # Indicate cache miss (not found)
+
+    def set(self, key, value, timeout=None):
+        """Add an item to the cache with an optional timeout (in seconds)."""
+        with self._lock: # Ensure thread safety
+            # Consider adding size limits if memory usage is a concern
+            self._cache[key] = value
+            if timeout:
+                self._expirations[key] = time.time() + timeout
+                print(f"[DEBUG CacheService] Set cache for key: {key} with timeout {timeout}s")
+            else:
+                # Remove any existing expiration if timeout is None
+                if key in self._expirations:
+                    del self._expirations[key]
+                print(f"[DEBUG CacheService] Set cache for key: {key} with no timeout")
+
+    def delete(self, key):
+        """Remove an item from the cache."""
+        with self._lock: # Ensure thread safety
+            if key in self._cache:
+                del self._cache[key]
+                if key in self._expirations:
+                    del self._expirations[key]
+                print(f"[DEBUG CacheService] Deleted cache for key: {key}")
+                return True
+            return False
+
+    def clear(self):
+        """Clear the entire cache."""
+        with self._lock: # Ensure thread safety
+            self._cache = {}
+            self._expirations = {}
+            print("[DEBUG CacheService] Cache cleared.")
     
     @staticmethod
     def get_db_connection():

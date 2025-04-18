@@ -596,7 +596,6 @@ const CheckpointManager = (function() {
                     from_type: cp.from_type || 'unclassified',
                     to_type: cp.to_type || 'residential',
                     confidence: cp.confidence || 0.7,
-                    source: cp.source || 'manual'
                 };
             });
         

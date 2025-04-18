@@ -6,6 +6,7 @@ import openrouteservice
 import traceback
 import random
 from services.cache_service import CacheService
+from flask import current_app
 
 class VRPService:
     """Service for Vehicle Routing Problem operations"""
@@ -352,4 +353,100 @@ class VRPService:
         
         except Exception as e:
             print(f"[DEBUG] OpenRouteService API error: {str(e)}")
+            return None
+
+    @staticmethod
+    def _get_ors_client(api_key=None):
+        """Gets an ORS client instance."""
+        if not api_key:
+            api_key = current_app.config.get('ORS_API_KEY')
+        if not api_key:
+            print("[WARN _get_ors_client] ORS API key not available.")
+            return None
+        try:
+            return openrouteservice.Client(key=api_key)
+        except Exception as e:
+            print(f"[ERROR _get_ors_client] Failed to create ORS client: {e}")
+            return None
+
+    @staticmethod
+    def get_detailed_route_geometry(coords_sequence, api_key=None):
+        """
+        Gets detailed route geometry from ORS Directions API for a sequence of coordinates.
+
+        Args:
+            coords_sequence (list): List of coordinate dicts [{'lat': float, 'lon': float}, ...].
+            api_key (str, optional): ORS API key. Defaults to config.
+
+        Returns:
+            list: List of [lat, lon] points for the detailed path, or None if failed.
+        """
+        # --- ADD DEBUG ---
+        print(f"[DEBUG get_detailed_route_geometry] Function called with {len(coords_sequence)} coordinates.")
+        # print(f"[DEBUG get_detailed_route_geometry] Coords: {coords_sequence}") # Optional: print full list if needed
+        # --- END DEBUG ---
+
+        if len(coords_sequence) < 2:
+            print("[DEBUG get_detailed_route_geometry] Too few coordinates, returning None.") # Add debug
+            return None # Cannot route with fewer than 2 points
+
+        client = VRPService._get_ors_client(api_key)
+        if not client:
+            print("[ERROR get_detailed_route_geometry] ORS client not available.")
+            return None
+
+        # ORS expects [lon, lat]
+        ors_coords = [[float(p['lon']), float(p['lat'])] for p in coords_sequence]
+
+        try:
+            print(f"[DEBUG get_detailed_route_geometry] Requesting ORS directions for {len(ors_coords)} points.")
+            # Note: ORS Directions has waypoint limits (typically 50).
+            # This simple version doesn't handle splitting large routes yet.
+            # Consider adding segmentation logic similar to the old get_detailed_path if needed.
+            if len(ors_coords) > 50:
+                 print(f"[WARN get_detailed_route_geometry] Route has {len(ors_coords)} waypoints, exceeding typical ORS limit of 50. Request might fail or be slow. Segmentation not implemented here.")
+
+            route_result = client.directions(
+                coordinates=ors_coords,
+                profile='driving-car',
+                geometry='true', # Request geometry
+                format='geojson' # GeoJSON includes coordinates directly
+            )
+
+            # Extract geometry coordinates
+            if route_result and 'features' in route_result and route_result['features']:
+                geometry = route_result['features'][0].get('geometry')
+                if geometry and geometry.get('type') == 'LineString':
+                    # Coordinates are [lon, lat], swap back to [lat, lon] for Leaflet
+                    detailed_path = [[coord[1], coord[0]] for coord in geometry['coordinates']]
+                    # --- ADD DEBUG ---
+                    print(f"[DEBUG get_detailed_route_geometry] Returning detailed path with {len(detailed_path)} points.")
+                    # --- END DEBUG ---
+                    return detailed_path
+                else:
+                     print("[WARN get_detailed_route_geometry] ORS response missing LineString geometry.")
+                     # --- ADD DEBUG ---
+                     print("[DEBUG get_detailed_route_geometry] Returning None (missing geometry).")
+                     # --- END DEBUG ---
+                     return None
+            else:
+                print("[WARN get_detailed_route_geometry] ORS directions response format unexpected or empty.")
+                # --- ADD DEBUG ---
+                print("[DEBUG get_detailed_route_geometry] Returning None (bad response format).")
+                # --- END DEBUG ---
+                return None
+
+        except openrouteservice.exceptions.ApiError as api_error:
+            print(f"[ERROR get_detailed_route_geometry] ORS API Error: {api_error}. Status: {api_error.status_code}. Message: {api_error.message}")
+            # --- ADD DEBUG ---
+            print("[DEBUG get_detailed_route_geometry] Returning None (API Error).")
+            # --- END DEBUG ---
+            return None
+        except Exception as e:
+            print(f"[ERROR get_detailed_route_geometry] Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+            # --- ADD DEBUG ---
+            print("[DEBUG get_detailed_route_geometry] Returning None (Unexpected Error).")
+            # --- END DEBUG ---
             return None

@@ -36,7 +36,6 @@ function loadSnapshots() {
                         <thead>
                             <tr>
                                 <th>Created</th>
-                                <th>ID</th>
                                 <th>Locations</th>
                                 <th>Clusters</th>
                                 <th>Actions</th>
@@ -49,7 +48,6 @@ function loadSnapshots() {
                     html += `
                         <tr>
                             <td>${snapshot.created_at}</td>
-                            <td>${snapshot.id}</td>
                             <td>${snapshot.stats?.locations || 0}</td>
                             <td>${snapshot.stats?.clusters || 0}</td>
                             <td>
@@ -598,6 +596,110 @@ function displayTestResults(solution, testType) {
         </div>
     `;
 
+    if (isCheckpointRoute) {
+        // Create a map of clusters to checkpoints that cover them
+        const clusterCoverage = {};
+        
+        solution.routes.forEach((route, routeIdx) => {
+            route.stops.forEach(stop => {
+                if (stop.clusters_served && Array.isArray(stop.clusters_served)) {
+                    stop.clusters_served.forEach(clusterId => {
+                        if (!clusterCoverage[clusterId]) {
+                            clusterCoverage[clusterId] = [];
+                        }
+                        clusterCoverage[clusterId].push({
+                            routeIdx,
+                            lat: stop.lat,
+                            lon: stop.lon
+                        });
+                    });
+                }
+            });
+        });
+        
+        // --- Modify Cluster Coverage Summary ---
+        html += `<div class="card mb-4">
+            <div class="card-header">
+                <h5>Cluster Coverage Summary</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Cluster ID</th>
+                            <th>Covered By Checkpoints</th>
+                            <th>In Route(s)</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+
+        // Get all required clusters (assuming they might be passed, otherwise derive from destinations)
+        // For simplicity, let's derive from the coverage map keys + missing list
+        const allRequiredClusters = new Set([
+             ...Object.keys(clusterCoverage).map(Number), // Clusters that were covered
+             ...(solution.missing_clusters || []) // Clusters that were missed
+            ]);
+
+        // Sort cluster IDs numerically for consistent display
+        const sortedClusterIds = Array.from(allRequiredClusters).sort((a, b) => a - b);
+
+        sortedClusterIds.forEach(clusterId => {
+            const checkpoints = clusterCoverage[clusterId]; // Checkpoints that cover this cluster in the solution
+            const isMissing = solution.missing_clusters && solution.missing_clusters.includes(clusterId);
+
+            let cpList = '-';
+            let routes = '-';
+            let statusHtml = '';
+
+            if (isMissing) {
+                cpList = '<span class="text-danger">Not Covered</span>';
+                routes = '-';
+                statusHtml = '<span class="badge bg-danger">Skipped</span>';
+            } else if (checkpoints && checkpoints.length > 0) {
+                // Format list of unique checkpoint coordinates covering this cluster
+                const uniqueCheckpoints = {};
+                checkpoints.forEach(cp => {
+                    const key = `${cp.lat.toFixed(5)},${cp.lon.toFixed(5)}`;
+                    if (!uniqueCheckpoints[key]) {
+                        uniqueCheckpoints[key] = { lat: cp.lat, lon: cp.lon, routes: new Set() };
+                    }
+                    uniqueCheckpoints[key].routes.add(cp.routeIdx + 1);
+                });
+
+                cpList = Object.values(uniqueCheckpoints).map(cp =>
+                    `CP @ (${cp.lat.toFixed(5)}, ${cp.lon.toFixed(5)})`
+                ).join('<br>'); // Use <br> for multi-line
+
+                // List unique vehicle routes involved
+                const uniqueRoutes = new Set();
+                checkpoints.forEach(cp => uniqueRoutes.add(cp.routeIdx + 1));
+                routes = Array.from(uniqueRoutes).sort((a, b) => a - b).join(', ');
+                statusHtml = '<span class="badge bg-success">Covered</span>';
+            } else {
+                 // Should not happen if logic is correct, but handle defensively
+                 cpList = '<span class="text-warning">Coverage Unknown</span>';
+                 routes = '-';
+                 statusHtml = '<span class="badge bg-warning">Unknown</span>';
+            }
+
+            html += `<tr>
+                <td>${clusterId}</td>
+                <td>${cpList}</td>
+                <td>${routes ? `Vehicle ${routes}` : '-'}</td>
+                <td>${statusHtml}</td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div></div>`;
+        // --- End Modified Cluster Coverage Summary ---
+
+        // *** Location to Checkpoint Mapping Section (No changes needed here) ***
+        if (isCheckpointRoute && solution.destinations && Array.isArray(solution.destinations)) {
+           // ... (existing code for location mapping table) ...
+        }
+    }
+
     html += '<h5>Routes</h5>';
     if (solution.routes && Array.isArray(solution.routes) && solution.routes.length > 0) {
         solution.routes.forEach((route, index) => {
@@ -696,38 +798,102 @@ function displayRouteOnMap(map, solution, isCheckpointRoute) {
         solution.routes.forEach((route, index) => {
             const color = colors[index % colors.length];
             let points = [];
+            let pathSource = 'direct';
 
-            if (isCheckpointRoute && route.path && Array.isArray(route.path)) {
-                 // Checkpoint route path already includes warehouse start/end and checkpoints
+            // *** Prioritize detailed ORS geometry ***
+            if (route.detailed_path_geometry && Array.isArray(route.detailed_path_geometry) && route.detailed_path_geometry.length > 1) {
+                points = route.detailed_path_geometry; // Use detailed ORS path
+                pathSource = 'ors_detailed';
+            }
+            // Fallback to basic path connecting stops
+            else if (route.path && Array.isArray(route.path)) {
                  points = route.path.map(stop =>
                      stop && stop.lat !== undefined && stop.lon !== undefined ? [stop.lat, stop.lon] : null
                  ).filter(p => p !== null);
-            } else if (!isCheckpointRoute && route.path && Array.isArray(route.path)) {
-                 // Static route path includes warehouse start/end and destinations
-                 points = route.path.map(stop =>
-                     stop && stop.lat !== undefined && stop.lon !== undefined ? [stop.lat, stop.lon] : null
-                 ).filter(p => p !== null);
+                 pathSource = 'basic_stops';
             }
 
             if (points.length > 1) {
-                L.polyline(points, { color: color, weight: 5, opacity: 0.7 }).addTo(map);
+                // Use a slightly different style for detailed paths if desired
+                const pathOptions = {
+                    color: color,
+                    weight: pathSource === 'ors_detailed' ? 4 : 5, // Thinner for detailed, thicker for basic
+                    opacity: 0.75
+                };
+                L.polyline(points, pathOptions).addTo(map);
+                console.log(`Route ${index + 1}: Polyline drawn using ${pathSource} data.`);
+            } else {
+                 console.warn(`Route ${index + 1}: Not enough points (${points.length}) to draw polyline.`);
             }
 
             // Add markers for stops
             if (isCheckpointRoute && route.stops && Array.isArray(route.stops)) {
-                // Checkpoint markers
-                const checkpointIcon = L.divIcon({
-                    className: 'checkpoint-icon',
-                    html: `CP`, // Generic CP label
-                    iconSize: [16, 16]
-                });
+                // Checkpoint markers with cluster information
                 route.stops.forEach((stop, stopIdx) => {
                     if (stop && stop.lat !== undefined && stop.lon !== undefined) {
-                        L.marker([stop.lat, stop.lon], { icon: checkpointIcon })
+                        // Create a custom colored icon based on clusters served
+                        const clusters = stop.clusters_served || [];
+                        
+                        // Use color-coded checkpoint markers with clear numbers
+                        const checkpointIcon = L.divIcon({
+                            className: 'checkpoint-icon-container', // Changed class name to avoid conflicts
+                            html: `<div class="cp-marker" style="
+                                      background-color: ${colors[index % colors.length]}; 
+                                      color: white; 
+                                      border-radius: 50%; 
+                                      width: 28px; 
+                                      height: 28px; 
+                                      display: flex; 
+                                      align-items: center; 
+                                      justify-content: center; 
+                                      font-weight: bold;
+                                      border: 2px solid white;
+                                      box-shadow: 0 1px 3px rgba(0,0,0,0.4);">
+                                    ${stopIdx + 1}
+                                  </div>`,
+                            iconSize: [28, 28],
+                            iconAnchor: [14, 14], // Center the icon over the coordinates
+                            popupAnchor: [0, -14] // Position popup above the icon
+                        });
+                        
+                        // 2. Create a more detailed popup
+                        const marker = L.marker([stop.lat, stop.lon], { icon: checkpointIcon })
                             .addTo(map)
-                            .bindPopup(`CP (Route ${index + 1})<br>Serves: ${stop.clusters_served?.join(', ') || 'N/A'}`); // Add Route index
+                            .bindPopup(`
+                                <div class="checkpoint-popup">
+                                    <h6>Checkpoint (Vehicle ${index + 1})</h6>
+                                    <p><strong>Coordinates:</strong> ${stop.lat.toFixed(5)}, ${stop.lon.toFixed(5)}</p>
+                                    <p><strong>Serves clusters:</strong></p>
+                                    <div class="cluster-badges">
+                                        ${clusters.map(id => `<span class="badge bg-info me-1">${id}</span>`).join('')}
+                                    </div>
+                                </div>
+                            `);
+                        
+                        // 3. Store reference to highlight on hover in results panel
+                        marker._checkpointIndex = stopIdx;
+                        marker._routeIndex = index;
                     }
                 });
+                
+                // 4. If you want to show the actual destinations within clusters:
+                if (solution.destinations) {
+                    solution.destinations.forEach(dest => {
+                        // Create small markers for actual destinations
+                        const destIcon = L.divIcon({
+                            className: 'destination-mini-icon',
+                            html: `<div style="background-color: #9e9e9e; 
+                                               width: 8px; 
+                                               height: 8px; 
+                                               border-radius: 50%;"></div>`,
+                            iconSize: [8, 8]
+                        });
+                        
+                        L.marker([dest.lat, dest.lon], { icon: destIcon })
+                            .addTo(map)
+                            .bindPopup(`Destination within Cluster ${dest.cluster_id}`);
+                    });
+                }
             } else if (!isCheckpointRoute && route.destination_coords && Array.isArray(route.destination_coords)) {
                 // Static destination markers
                 route.destination_coords.forEach((dest_coord, stopIdx) => {
@@ -745,6 +911,25 @@ function displayRouteOnMap(map, solution, isCheckpointRoute) {
                             .bindPopup(`Destination ${stopIdx + 1} (Route ${index + 1})`); // Add Route index
                     }
                 });
+            }
+        });
+    }
+
+    // --- Display Original Preset Destinations (for context) ---
+    if (solution.destinations && Array.isArray(solution.destinations)) {
+        solution.destinations.forEach(dest => {
+            if (dest && dest.lat !== undefined && dest.lon !== undefined) {
+                const destIcon = L.divIcon({
+                    className: 'original-destination-icon',
+                    html: `<div style="background-color: #9e9e9e; 
+                                       width: 8px; 
+                                       height: 8px; 
+                                       border-radius: 50%;"></div>`,
+                    iconSize: [8, 8]
+                });
+                L.marker([dest.lat, dest.lon], { icon: destIcon })
+                    .addTo(map)
+                    .bindPopup(`Original Location<br>Cluster: ${dest.cluster_id || 'N/A'}`);
             }
         });
     }
@@ -902,7 +1087,6 @@ function loadTestHistory() {
                             <thead>
                                 <tr>
                                     <th><input type="checkbox" id="select-all-tests"></th>
-                                    <th>ID</th>
                                     <th>Date</th>
                                     <th>Algorithm</th>
                                     <th>Vehicles</th>
@@ -918,7 +1102,6 @@ function loadTestHistory() {
                         html += `
                             <tr>
                                 <td><input type="checkbox" class="test-checkbox select-test-cb" value="${test.id}"></td>
-                                <td>${test.id}</td>
                                 <td>${test.test_info && test.test_info.timestamp ? 
                                     new Date(test.test_info.timestamp).toLocaleString() : 
                                     new Date(test.created_at || Date.now()).toLocaleString()}</td>

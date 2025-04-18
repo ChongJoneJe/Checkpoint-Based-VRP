@@ -62,49 +62,56 @@ class VehicleRoutingProblem:
     
     def _calculate_distance_matrix(self):
         """
-        Calculate distance matrix between all locations
+        Calculate distance matrix between all locations using OpenRouteService.
+        Raises an exception if ORS fails.
         """
-        if self.api_key:
-            try:
-                client = openrouteservice.Client(key=self.api_key)
-                
-                # Format coordinates for ORS (lon, lat)
-                all_coords = [self.warehouse] + self.destinations
-                ors_coords = [[point[1], point[0]] for point in all_coords]
-                
-                # Request distance matrix
-                matrix = client.distance_matrix(
-                    locations=ors_coords,
-                    profile='driving-car',
-                    metrics=['distance'],
-                    units='km'
-                )
-                
-                # Successfully used road network
-                self.using_road_network = True
-                
-                # Convert to numpy array and return
-                return np.array(matrix['distances'])
-                    
-            except Exception as e:
-                print(f"OpenRouteService API error: {str(e)}")
-                print("Falling back to Euclidean distance")
-                self.using_road_network = False
-        
-        # Fall back to Euclidean distance calculation
-        all_coords = [self.warehouse] + self.destinations
-        n = len(all_coords)
-        matrix = np.zeros((n, n))
-        
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    lat1, lon1 = all_coords[i]
-                    lat2, lon2 = all_coords[j]
-                    matrix[i, j] = self._haversine_distance(lat1, lon1, lat2, lon2)
-        
-        return matrix
-    
+        self.using_road_network = False # Assume failure initially
+        if not self.api_key:
+            print("[ERROR VRP] ORS API key is missing. Cannot calculate road network distances.")
+            raise ValueError("ORS API key is required for distance matrix calculation.")
+
+        try:
+            client = openrouteservice.Client(key=self.api_key)
+
+            # Format coordinates for ORS (lon, lat)
+            all_coords = [self.warehouse] + self.destinations
+            # Ensure coordinates are [lat, lon] format before swapping
+            ors_coords = [[float(point[1]), float(point[0])] for point in all_coords if len(point) == 2]
+
+            if len(ors_coords) != len(all_coords):
+                 raise ValueError("Invalid coordinate format found in warehouse or destinations.")
+
+            print(f"[DEBUG VRP] Requesting ORS distance matrix for {len(ors_coords)} locations...")
+            # Request distance matrix
+            matrix_result = client.distance_matrix(
+                locations=ors_coords,
+                profile='driving-car',
+                metrics=['distance'],
+                units='km'
+            )
+
+            # Check response structure
+            if 'distances' not in matrix_result or not isinstance(matrix_result['distances'], list):
+                raise ValueError("ORS distance matrix response format unexpected.")
+
+            distances = np.array(matrix_result['distances'])
+            if distances.shape != (len(ors_coords), len(ors_coords)):
+                 raise ValueError(f"ORS distance matrix shape mismatch. Expected ({len(ors_coords)}, {len(ors_coords)}), Got {distances.shape}")
+
+            print("[DEBUG VRP] Successfully received ORS distance matrix.")
+            self.using_road_network = True
+            return distances # Return NumPy array
+
+        except openrouteservice.exceptions.ApiError as ors_error:
+             print(f"[ERROR VRP] OpenRouteService API error during distance matrix calculation: {ors_error}")
+             raise ConnectionError(f"ORS API Error: {ors_error.message} (Status: {ors_error.status_code})") from ors_error
+        except Exception as e:
+            print(f"[ERROR VRP] Unexpected error during ORS distance matrix calculation: {e}")
+            import traceback
+            traceback.print_exc()
+            # Re-raise as a generic error indicating failure
+            raise RuntimeError(f"Failed to calculate ORS distance matrix: {e}") from e
+
     def _haversine_distance(self, lat1, lon1, lat2, lon2):
         """
         Calculate the Haversine distance between two points in kilometers
