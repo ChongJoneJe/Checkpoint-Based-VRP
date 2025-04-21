@@ -879,3 +879,16 @@ header {
         margin-top: 15px;
     }
 }
+
+.original-destination-marker {
+    background-color: grey;
+    width: 8px;
+    height: 8px;
+    display: block;
+    border-radius: 50%;
+    border: 1px solid darkgrey;
+}
+.original-destination-icon {
+    margin-left: -4px;
+    margin-top: -4px;
+}

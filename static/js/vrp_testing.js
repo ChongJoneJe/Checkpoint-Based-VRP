@@ -1,4 +1,12 @@
-console.log("VRP Testing JS loading...");
+let dynamicPickingState = 'idle'; // 'idle', 'picking_pickup', 'picking_dropoff'
+let tempPickupCoords = null;
+let tempDropoffCoords = null;
+let tempPickupMarker = null;
+let tempDropoffMarker = null;
+let dynamicLocationPairs = []; // To store processed pairs [{pickup: {...}, dropoff: {...}}, ...]
+let currentDynamicMapInstance = null; // Store the map instance used for picking
+let currentVrpSolution = null; // Store the initial solution for reference
+let currentTestConfig = null; // Store the config used for the initial run
 
 // Update loadSnapshots function to handle array responses
 function loadSnapshots() {
@@ -451,13 +459,14 @@ function viewTest(testId) {
             console.log('Test data:', data);
             if (data.status === 'success') {
                 // Store current solution for potential dynamic operations
-                window.currentVrpSolution = data.result;
-                window.currentTestConfig = {
+                currentVrpSolution = data.result;
+                currentTestConfig = {
                     snapshot_id: data.result.test_info?.snapshot_id,
                     preset_id: data.result.test_info?.preset_id,
                     algorithm: data.result.test_info?.algorithm,
                     num_vehicles: data.result.test_info?.num_vehicles,
-                    test_type: data.result.test_info?.test_type || 'static'
+                    test_type: data.result.test_info?.test_type || 'static',
+                    api_key: '' // API key might not be stored, retrieve if needed
                 };
                 
                 // Display the test result
@@ -541,8 +550,8 @@ function runTest() {
         console.log('Response from server:', data);
         if (data.status === 'success') {
             // Store current solution for dynamic insertion
-            window.currentVrpSolution = data.solution;
-            window.currentTestConfig = requestData;
+            currentVrpSolution = data.solution;
+            currentTestConfig = requestData;
             
             // Display results
             displayTestResults(data.solution, testType);
@@ -575,17 +584,38 @@ function runTest() {
 function displayTestResults(solution, testType) {
     const resultsPanel = document.getElementById('results-panel');
     const resultsContent = document.getElementById('results-content');
+    const dynamicSection = document.getElementById('dynamic-section');
+    const dynamicLocationsList = document.getElementById('dynamic-locations-list');
+    const mapElement = document.getElementById('test-map');
+    
     resultsPanel.classList.remove('hidden');
+    dynamicSection.classList.add('hidden');
+    dynamicLocationsList.innerHTML = '';
+    dynamicLocationPairs = []; // Reset stored pairs
+    
+    // Clean up previous map if it exists
+    if (currentDynamicMapInstance) {
+        console.log("Removing existing map instance");
+        currentDynamicMapInstance.remove();
+        currentDynamicMapInstance = null;
+    }
+    
+    if (mapElement) {
+        mapElement.innerHTML = ''; // Clear previous map element content
+    }
 
     // Determine route type based on testType or solution structure
-    const isCheckpointRoute = (testType === 'checkpoints' || testType === 'dynamic') || (solution.routes && solution.routes[0]?.stops && solution.routes[0].stops[0]?.type === 'checkpoint');
+    const isCheckpointRoute = (testType === 'checkpoints' || testType === 'dynamic') || 
+                             (solution.routes && solution.routes[0]?.stops && 
+                              solution.routes[0].stops[0]?.type === 'checkpoint');
 
     // Add a more descriptive distance type label
     const distanceTypeLabel = solution.distance_type === 'road_network' ? 
         'Road Network (OpenRouteService)' : 
         (solution.distance_type === 'haversine' ? 
-            'Straight-line (Haversine)' : solution.distance_type);
+            'Straight-line (Haversine)' : solution.distance_type || 'Unknown');
 
+    // Generate HTML content for results summary
     let html = `
         <div class="results-summary">
             <h4>Test Results (${testType})</h4>
@@ -596,12 +626,13 @@ function displayTestResults(solution, testType) {
         </div>
     `;
 
+    // Add cluster coverage section for checkpoint routes
     if (isCheckpointRoute) {
         // Create a map of clusters to checkpoints that cover them
         const clusterCoverage = {};
         
         solution.routes.forEach((route, routeIdx) => {
-            route.stops.forEach(stop => {
+            route.stops?.forEach(stop => {
                 if (stop.clusters_served && Array.isArray(stop.clusters_served)) {
                     stop.clusters_served.forEach(clusterId => {
                         if (!clusterCoverage[clusterId]) {
@@ -617,7 +648,7 @@ function displayTestResults(solution, testType) {
             });
         });
         
-        // --- Modify Cluster Coverage Summary ---
+        // Generate cluster coverage summary table
         html += `<div class="card mb-4">
             <div class="card-header">
                 <h5>Cluster Coverage Summary</h5>
@@ -634,18 +665,18 @@ function displayTestResults(solution, testType) {
                     </thead>
                     <tbody>`;
 
-        // Get all required clusters (assuming they might be passed, otherwise derive from destinations)
-        // For simplicity, let's derive from the coverage map keys + missing list
+        // Get all required clusters
         const allRequiredClusters = new Set([
-             ...Object.keys(clusterCoverage).map(Number), // Clusters that were covered
-             ...(solution.missing_clusters || []) // Clusters that were missed
+             ...Object.keys(clusterCoverage).map(Number),
+             ...(solution.missing_clusters || [])
             ]);
 
         // Sort cluster IDs numerically for consistent display
         const sortedClusterIds = Array.from(allRequiredClusters).sort((a, b) => a - b);
 
+        // Generate rows for each cluster
         sortedClusterIds.forEach(clusterId => {
-            const checkpoints = clusterCoverage[clusterId]; // Checkpoints that cover this cluster in the solution
+            const checkpoints = clusterCoverage[clusterId];
             const isMissing = solution.missing_clusters && solution.missing_clusters.includes(clusterId);
 
             let cpList = '-';
@@ -669,7 +700,7 @@ function displayTestResults(solution, testType) {
 
                 cpList = Object.values(uniqueCheckpoints).map(cp =>
                     `CP @ (${cp.lat.toFixed(5)}, ${cp.lon.toFixed(5)})`
-                ).join('<br>'); // Use <br> for multi-line
+                ).join('<br>');
 
                 // List unique vehicle routes involved
                 const uniqueRoutes = new Set();
@@ -677,7 +708,6 @@ function displayTestResults(solution, testType) {
                 routes = Array.from(uniqueRoutes).sort((a, b) => a - b).join(', ');
                 statusHtml = '<span class="badge bg-success">Covered</span>';
             } else {
-                 // Should not happen if logic is correct, but handle defensively
                  cpList = '<span class="text-warning">Coverage Unknown</span>';
                  routes = '-';
                  statusHtml = '<span class="badge bg-warning">Unknown</span>';
@@ -692,14 +722,9 @@ function displayTestResults(solution, testType) {
         });
 
         html += `</tbody></table></div></div>`;
-        // --- End Modified Cluster Coverage Summary ---
-
-        // *** Location to Checkpoint Mapping Section (No changes needed here) ***
-        if (isCheckpointRoute && solution.destinations && Array.isArray(solution.destinations)) {
-           // ... (existing code for location mapping table) ...
-        }
     }
 
+    // Add routes section
     html += '<h5>Routes</h5>';
     if (solution.routes && Array.isArray(solution.routes) && solution.routes.length > 0) {
         solution.routes.forEach((route, index) => {
@@ -747,31 +772,72 @@ function displayTestResults(solution, testType) {
         html += `<p>No routes generated or available.</p>`;
     }
 
-    resultsContent.innerHTML = html; // Render text results first
+    resultsContent.innerHTML = html;
 
-    // Add map display logic
-    const mapElement = document.getElementById('test-map');
+    // Initialize and display map
     if (mapElement) {
-        mapElement.innerHTML = ''; // Clear previous map
-
-        // *** ADD CHECK HERE ***
-        if (solution && solution.warehouse && typeof solution.warehouse.lat === 'number' && typeof solution.warehouse.lon === 'number') {
-            try {
-                // Map creation might fail if Leaflet isn't loaded or div isn't ready
-                const map = Utils.createMap('test-map', [solution.warehouse.lat, solution.warehouse.lon], 13);
-                if (map) { // Check if map was created successfully
-                     displayRouteOnMap(map, solution, isCheckpointRoute); // Pass flag
-                } else {
-                     console.error("Failed to create map instance.");
-                     mapElement.innerHTML = '<div class="alert alert-danger">Error creating map.</div>';
+        try {
+            // Extract warehouse coordinates with fallback options
+            let warehouseCoords = [1.3521, 103.8198]; // Default to Singapore
+            let validWarehouse = false;
+            
+            if (solution) {
+                if (solution.warehouse) {
+                    if (Array.isArray(solution.warehouse) && solution.warehouse.length >= 2) {
+                        warehouseCoords = [solution.warehouse[0], solution.warehouse[1]];
+                        validWarehouse = true;
+                    } else if (typeof solution.warehouse === 'object') {
+                        if (typeof solution.warehouse.lat === 'number' && 
+                            (typeof solution.warehouse.lon === 'number' || typeof solution.warehouse.lng === 'number')) {
+                            warehouseCoords = [
+                                solution.warehouse.lat, 
+                                solution.warehouse.lon || solution.warehouse.lng
+                            ];
+                            validWarehouse = true;
+                        }
+                    }
+                } else if (solution.routes && solution.routes.length > 0) {
+                    // Try to find warehouse in the first route
+                    const firstRoute = solution.routes[0];
+                    if (firstRoute.path && firstRoute.path.length > 0) {
+                        const firstPoint = firstRoute.path[0];
+                        if (firstPoint && typeof firstPoint.lat === 'number' && 
+                            (typeof firstPoint.lon === 'number' || typeof firstPoint.lng === 'number')) {
+                            warehouseCoords = [
+                                firstPoint.lat, 
+                                firstPoint.lon || firstPoint.lng
+                            ];
+                            validWarehouse = true;
+                        }
+                    }
                 }
-            } catch (mapError) {
-                console.error("Error during map creation/display:", mapError);
-                mapElement.innerHTML = `<div class="alert alert-danger">Error displaying map: ${mapError.message}</div>`;
             }
-        } else {
-            console.error("Map data incomplete or invalid warehouse:", solution ? solution.warehouse : 'solution undefined');
-            mapElement.innerHTML = '<div class="alert alert-warning">Map data incomplete (missing or invalid warehouse coordinates).</div>';
+            
+            console.log("Creating new map with center:", warehouseCoords);
+            
+            // Create a new map instance
+            const map = L.map('test-map').setView(warehouseCoords, 13);
+            currentDynamicMapInstance = map;
+            
+            // Add the tile layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+            
+            // Display routes if available
+            if (solution && solution.routes) {
+                displayRouteOnMap(map, solution, isCheckpointRoute);
+            }
+            
+            // Setup dynamic functionality if needed
+            if (testType === 'dynamic') {
+                setupDynamicPicking(map);
+                setupDynamicInsertionUI(solution);
+                dynamicSection.classList.remove('hidden');
+            }
+        } catch (mapError) {
+            console.error("Error during map creation/display:", mapError);
+            mapElement.innerHTML = `<div class="alert alert-danger">Error displaying map: ${mapError.message}</div>`;
         }
     }
 
@@ -780,290 +846,710 @@ function displayTestResults(solution, testType) {
     }
 }
 
-// Modify displayRouteOnMap to handle checkpoint routes
-function displayRouteOnMap(map, solution, isCheckpointRoute) {
-    // Add warehouse marker
-    const warehouseIcon = L.divIcon({
-        className: 'warehouse-icon',
-        html: '<i class="fas fa-warehouse"></i>',
-        iconSize: [20, 20]
-    });
-    L.marker([solution.warehouse.lat, solution.warehouse.lon], {icon: warehouseIcon})
-        .addTo(map)
-        .bindPopup('Warehouse');
+// Function to set up dynamic location picking
+function setupDynamicPicking(map) {
+    const addPairBtn = document.getElementById('add-dynamic-pair-btn');
+    const instructions = document.getElementById('dynamic-instructions');
 
+    if (!addPairBtn || !instructions || !map) {
+        console.error("Missing elements needed for dynamic picking setup");
+        return;
+    }
+
+    addPairBtn.onclick = () => {
+        if (dynamicPickingState === 'idle') {
+            dynamicPickingState = 'picking_pickup';
+            instructions.textContent = 'Click on the map to select the PICKUP location.';
+            addPairBtn.innerHTML = '<i class="fas fa-times"></i> Cancel Picking';
+            addPairBtn.classList.remove('btn-primary');
+            addPairBtn.classList.add('btn-secondary');
+            map.getContainer().style.cursor = 'crosshair';
+        } else {
+            // Cancel picking
+            resetPickingState(map);
+        }
+    };
+
+    map.off('click');
+    map.on('click', handleDynamicMapClick);
+}
+
+// Function to handle clicks on the map during dynamic picking
+function handleDynamicMapClick(e) {
+    if (!currentDynamicMapInstance) return; // Ensure map exists
+
+    if (dynamicPickingState === 'picking_pickup') {
+        tempPickupCoords = e.latlng;
+        if (tempPickupMarker) tempPickupMarker.remove(); // Remove previous temp marker
+        tempPickupMarker = L.marker(tempPickupCoords, { icon: Utils.createSimpleIcon('P', 'green') }).addTo(currentDynamicMapInstance);
+        tempPickupMarker.bindPopup('Temporary Pickup').openPopup();
+
+        dynamicPickingState = 'picking_dropoff';
+        document.getElementById('dynamic-instructions').textContent = 'Click on the map to select the DROPOFF location.';
+        // Keep button as Cancel
+
+    } else if (dynamicPickingState === 'picking_dropoff') {
+        tempDropoffCoords = e.latlng;
+        if (tempDropoffMarker) tempDropoffMarker.remove(); // Remove previous temp marker
+        tempDropoffMarker = L.marker(tempDropoffCoords, { icon: Utils.createSimpleIcon('D', 'red') }).addTo(currentDynamicMapInstance);
+        tempDropoffMarker.bindPopup('Temporary Dropoff').openPopup();
+
+        // Both points selected, process the pair
+        processNewPair(tempPickupCoords, tempDropoffCoords);
+        resetPickingState(currentDynamicMapInstance); // Reset state after selection
+    }
+}
+
+// Function to reset the picking state
+function resetPickingState(map) {
+    const addPairBtn = document.getElementById('add-dynamic-pair-btn');
+    const instructions = document.getElementById('dynamic-instructions');
+
+    dynamicPickingState = 'idle';
+    tempPickupCoords = null;
+    tempDropoffCoords = null;
+    if (tempPickupMarker) tempPickupMarker.remove();
+    if (tempDropoffMarker) tempDropoffMarker.remove();
+    tempPickupMarker = null;
+    tempDropoffMarker = null;
+
+    instructions.textContent = 'Click the button below, then click on the map to select a pickup location, followed by a dropoff location.';
+    addPairBtn.innerHTML = '<i class="fas fa-map-marker-alt"></i> Add New Location Pair';
+    addPairBtn.classList.remove('btn-secondary');
+    addPairBtn.classList.add('btn-primary');
+    if (map) map.getContainer().style.cursor = '';
+}
+
+// Function to process the selected pair (calls backend)
+function processNewPair(pickupCoords, dropoffCoords) {
+    console.log("Processing new pair:", pickupCoords, dropoffCoords);
+    const dynamicLocationsList = document.getElementById('dynamic-locations-list');
+    const loadingHtml = `<div class="list-group-item list-group-item-action temp-processing">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1"><i class="fas fa-spinner fa-spin"></i> Processing new pair...</h6>
+                            </div>
+                            <small>Pickup: ${pickupCoords.lat.toFixed(5)}, ${pickupCoords.lng.toFixed(5)}</small><br>
+                            <small>Dropoff: ${dropoffCoords.lat.toFixed(5)}, ${dropoffCoords.lng.toFixed(5)}</small>
+                         </div>`;
+    dynamicLocationsList.insertAdjacentHTML('beforeend', loadingHtml);
+
+    // Use the globally stored config
+    const snapshotId = currentTestConfig?.snapshot_id;
+    const presetId = currentTestConfig?.preset_id;
+
+    if (!snapshotId || !presetId) {
+         alert("Error: Cannot process dynamic pair without snapshot/preset context from the initial test run.");
+         document.querySelector('.temp-processing')?.remove();
+         return;
+    }
+
+    fetch('/vrp_testing/process_dynamic_pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            pickup_lat: pickupCoords.lat,
+            pickup_lon: pickupCoords.lng,
+            dropoff_lat: dropoffCoords.lat,
+            dropoff_lon: dropoffCoords.lng,
+            snapshot_id: snapshotId,
+            preset_id: presetId
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.querySelector('.temp-processing')?.remove(); // Remove loading indicator
+        if (data.status === 'success') {
+            console.log("Processed pair data:", data.pair_info);
+            dynamicLocationPairs.push(data.pair_info); // Store the processed pair
+            displayProcessedPair(data.pair_info); // Add to the list display
+            // Enable insertion button if pairs exist
+            const insertBtn = document.getElementById('insert-dynamic-btn');
+            if (insertBtn) insertBtn.disabled = false;
+        } else {
+            alert(`Error processing pair: ${data.message}`);
+        }
+    })
+    .catch(error => {
+        document.querySelector('.temp-processing')?.remove();
+        console.error('Error processing dynamic pair:', error);
+        alert('An error occurred while processing the location pair.');
+    });
+}
+
+// Function to display a processed pair in the list
+function displayProcessedPair(pairInfo) {
+    const dynamicLocationsList = document.getElementById('dynamic-locations-list');
+    const pickupCluster = pairInfo.pickup.cluster_id ? `Cluster ${pairInfo.pickup.cluster_id}` : 'N/A';
+    const dropoffCluster = pairInfo.dropoff.cluster_id ? `Cluster ${pairInfo.dropoff.cluster_id}` : 'N/A';
+    const pickupCPs = pairInfo.pickup.checkpoints.length > 0 ? pairInfo.pickup.checkpoints.map(cp => `CP #${cp.id}`).join(', ') : 'None';
+    const dropoffCPs = pairInfo.dropoff.checkpoints.length > 0 ? pairInfo.dropoff.checkpoints.map(cp => `CP #${cp.id}`).join(', ') : 'None';
+
+    const pairHtml = `
+        <div class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1">New Location Pair #${dynamicLocationPairs.length}</h6>
+                <small>${new Date().toLocaleTimeString()}</small>
+            </div>
+            <p class="mb-1 small">
+                <strong>Pickup:</strong> (${pairInfo.pickup.lat.toFixed(5)}, ${pairInfo.pickup.lon.toFixed(5)}) - ${pairInfo.pickup.address?.street || 'Unknown Street'} <br>
+                &nbsp;&nbsp;↳ Cluster: ${pickupCluster}, Checkpoints: ${pickupCPs}
+            </p>
+            <p class="mb-1 small">
+                <strong>Dropoff:</strong> (${pairInfo.dropoff.lat.toFixed(5)}, ${pairInfo.dropoff.lon.toFixed(5)}) - ${pairInfo.dropoff.address?.street || 'Unknown Street'} <br>
+                &nbsp;&nbsp;↳ Cluster: ${dropoffCluster}, Checkpoints: ${dropoffCPs}
+            </p>
+        </div>`;
+    dynamicLocationsList.insertAdjacentHTML('beforeend', pairHtml);
+}
+
+// Helper to create simple icons for temp markers
+Utils.createSimpleIcon = function(text, color) {
+    return L.divIcon({
+        className: 'simple-marker',
+        html: `<div style="background-color:${color}; color:white; border-radius:50%; width:20px; height:20px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold;">${text}</div>`,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+    });
+};
+
+// Display routes on map with checkpoint handling
+function displayRouteOnMap(map, solution, isCheckpointRoute) {
+    if (!map || !solution) {
+        console.error("Invalid map or solution for route display");
+        return;
+    }
+
+    // Clear any existing layers
+    if (window.routeLayers && window.routeLayers.length) {
+        window.routeLayers.forEach(layer => {
+            if (layer && map.hasLayer(layer)) {
+                map.removeLayer(layer);
+            }
+        });
+    }
+    window.routeLayers = [];
+
+    // Define colors for routes
     const colors = ['#f44336', '#2196f3', '#4caf50', '#ff9800', '#9c27b0', '#00bcd4', '#ffeb3b', '#795548'];
 
+    // Display warehouse marker (using original warehouse context if available)
+    try {
+        let warehouseLat, warehouseLon;
+        // Use the warehouse from the main solution context, not potentially the subproblem start point
+        const mainWarehouse = solution.test_info?.original_warehouse || solution.warehouse; // Prefer original if available
+        if (mainWarehouse) {
+             if (Array.isArray(mainWarehouse) && mainWarehouse.length >= 2) {
+                warehouseLat = mainWarehouse[0];
+                warehouseLon = mainWarehouse[1];
+            } else if (typeof mainWarehouse === 'object') {
+                warehouseLat = mainWarehouse.lat;
+                warehouseLon = mainWarehouse.lon || mainWarehouse.lng;
+            }
+        }
+
+        if (warehouseLat !== undefined && warehouseLon !== undefined) {
+            const warehouseIcon = L.divIcon({
+                className: 'warehouse-icon',
+                html: '<i class="fas fa-warehouse"></i>',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+
+            const warehouseMarker = L.marker([warehouseLat, warehouseLon], {
+                icon: warehouseIcon
+            }).addTo(map);
+
+            warehouseMarker.bindPopup('Warehouse');
+            window.routeLayers.push(warehouseMarker);
+        } else {
+             console.warn("Could not determine warehouse coordinates for marker.");
+        }
+    } catch (e) {
+        console.error("Error adding warehouse marker:", e);
+    }
+
+    // --- Add Original Preset Destination Markers ---
+    if (solution.destinations && Array.isArray(solution.destinations)) {
+        console.log(`Adding ${solution.destinations.length} original destination markers.`);
+        solution.destinations.forEach(dest => {
+            if (dest && dest.lat !== undefined && (dest.lon !== undefined || dest.lng !== undefined)) {
+                // Check if this location is already marked as part of an active route (checkpoint or dynamic stop)
+                let alreadyMarked = false;
+                window.routeLayers.forEach(layer => {
+                    if (layer instanceof L.Marker) {
+                        const markerLatLng = layer.getLatLng();
+                        if (markerLatLng.lat === dest.lat && markerLatLng.lng === (dest.lon || dest.lng)) {
+                            alreadyMarked = true;
+                        }
+                    }
+                });
+
+                // Only add a distinct marker if it's not already part of an active route path/stop
+                if (!alreadyMarked) {
+                    const clusterId = dest.cluster_id || 'N/A';
+                    const markerIcon = L.divIcon({
+                        html: `<span class="original-destination-marker" title="Cluster ${clusterId}"></span>`,
+                        className: 'original-destination-icon',
+                        iconSize: [8, 8], // Make them small
+                        iconAnchor: [4, 4]
+                    });
+                    const popupContent = `
+                        <div class="original-destination-popup">
+                            <h6>Original Location (Cluster ${clusterId})</h6>
+                            <p>Coords: ${dest.lat.toFixed(5)}, ${(dest.lon || dest.lng).toFixed(5)}</p>
+                        </div>`;
+
+                    const marker = L.marker([dest.lat, dest.lon || dest.lng], { icon: markerIcon, zIndexOffset: -100 }) // Lower z-index
+                        .addTo(map)
+                        .bindPopup(popupContent);
+                    window.routeLayers.push(marker); // Add to layers for clearing
+                }
+            }
+        });
+    }
+    // --- End Original Destination Markers ---
+
+    // Display routes
     if (solution.routes && Array.isArray(solution.routes)) {
         solution.routes.forEach((route, index) => {
             const color = colors[index % colors.length];
             let points = [];
-            let pathSource = 'direct';
+            let pathSource = 'unknown';
 
-            // *** Prioritize detailed ORS geometry ***
-            if (route.detailed_path_geometry && Array.isArray(route.detailed_path_geometry) && route.detailed_path_geometry.length > 1) {
-                points = route.detailed_path_geometry; // Use detailed ORS path
-                pathSource = 'ors_detailed';
+            // --- Determine Path Points Based on Route Type ---
+            if (isCheckpointRoute) {
+                // For checkpoint routes, PRIORITIZE detailed geometry if available
+                if (route.detailed_path_geometry && Array.isArray(route.detailed_path_geometry) && route.detailed_path_geometry.length > 1) {
+                    points = route.detailed_path_geometry; // Use the detailed path from backend
+                    pathSource = 'ors_detailed_checkpoint';
+                    console.log(`Route ${index + 1}: Using detailed geometry for checkpoint route.`);
+                } else {
+                    // FALLBACK: If no detailed geometry, connect start, checkpoints, end with straight lines
+                    pathSource = 'checkpoint_stops_filtered_fallback';
+                    points = [];
+                    console.log(`Route ${index + 1}: No detailed geometry found, falling back to straight lines between checkpoints.`);
+                    if (route.path && Array.isArray(route.path)) {
+                        route.path.forEach((point, index) => {
+                            // Include: Start, Checkpoints, End
+                            if (index === 0 || index === route.path.length - 1 || point.type === 'checkpoint') {
+                                if (point && point.lat !== undefined && (point.lon !== undefined || point.lng !== undefined)) {
+                                    const coords = [point.lat, point.lon || point.lng];
+                                    // Avoid adding duplicate consecutive points
+                                    if (points.length === 0 || points[points.length - 1][0] !== coords[0] || points[points.length - 1][1] !== coords[1]) {
+                                        points.push(coords);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    // Fallback for < 2 points in filtered list
+                    if (points.length < 2 && route.path && route.path.length >= 2) {
+                         console.warn(`Route ${index + 1}: Fallback filtering resulted in < 2 points. Drawing direct start-to-end.`);
+                         points = []; // Reset and just use start/end
+                         const startPoint = route.path[0];
+                         const endPoint = route.path[route.path.length - 1];
+                         if (startPoint && startPoint.lat !== undefined && (startPoint.lon !== undefined || startPoint.lng !== undefined)) {
+                             points.push([startPoint.lat, startPoint.lon || startPoint.lng]);
+                         }
+                         if (endPoint && endPoint.lat !== undefined && (endPoint.lon !== undefined || endPoint.lng !== undefined)) {
+                             if (points.length === 0 || points[0][0] !== endPoint.lat || points[0][1] !== (endPoint.lon || endPoint.lng)) {
+                                 points.push([endPoint.lat, endPoint.lon || endPoint.lng]);
+                             }
+                         }
+                    }
+                }
+            } else { // Static routes (non-checkpoint)
+                // Use detailed geometry if available, otherwise basic path
+                if (route.detailed_path_geometry && Array.isArray(route.detailed_path_geometry) && route.detailed_path_geometry.length > 1) {
+                    points = route.detailed_path_geometry;
+                    pathSource = 'ors_detailed_static';
+                } else if (route.path && Array.isArray(route.path)) {
+                    points = route.path.map(stop => {
+                        if (stop && stop.lat !== undefined && (stop.lon !== undefined || stop.lng !== undefined)) {
+                            return [stop.lat, stop.lon || stop.lng];
+                        }
+                        return null;
+                    }).filter(p => p !== null);
+                    pathSource = 'basic_path_static';
+                }
             }
-            // Fallback to basic path connecting stops
-            else if (route.path && Array.isArray(route.path)) {
-                 points = route.path.map(stop =>
-                     stop && stop.lat !== undefined && stop.lon !== undefined ? [stop.lat, stop.lon] : null
-                 ).filter(p => p !== null);
-                 pathSource = 'basic_stops';
-            }
+            // --- End Path Point Determination ---
 
+            console.log(`Route ${index + 1} Path Source: ${pathSource}, Points: ${points.length}`);
+
+            // Draw polyline if enough points
             if (points.length > 1) {
-                // Use a slightly different style for detailed paths if desired
                 const pathOptions = {
                     color: color,
-                    weight: pathSource === 'ors_detailed' ? 4 : 5, // Thinner for detailed, thicker for basic
-                    opacity: 0.75
+                    // Use consistent weight, or differentiate based on source if desired
+                    weight: 4, // pathSource === 'ors_detailed_checkpoint' || pathSource === 'ors_detailed_static' ? 4 : 5,
+                    opacity: 0.8
                 };
-                L.polyline(points, pathOptions).addTo(map);
-                console.log(`Route ${index + 1}: Polyline drawn using ${pathSource} data.`);
+                const polyline = L.polyline(points, pathOptions).addTo(map);
+                window.routeLayers.push(polyline);
+
+                // Add directional arrows (requires Leaflet.Polyline.Decorator)
+                try {
+                     L.polylineDecorator(polyline, {
+                        patterns: [
+                            {offset: 25, repeat: 50, symbol: L.Symbol.arrowHead({pixelSize: 10, pathOptions: {fillOpacity: 1, weight: 0, color: color}})}
+                        ]
+                    }).addTo(map);
+                } catch(arrowError) {
+                    console.warn("Could not add directional arrows. Is Leaflet.PolylineDecorator included?", arrowError);
+                }
             } else {
-                 console.warn(`Route ${index + 1}: Not enough points (${points.length}) to draw polyline.`);
+                 console.warn(`Route ${index + 1}: Not enough points (${points?.length || 0}) to draw polyline.`);
             }
 
-            // Add markers for stops
-            if (isCheckpointRoute && route.stops && Array.isArray(route.stops)) {
-                // Checkpoint markers with cluster information
-                route.stops.forEach((stop, stopIdx) => {
-                    if (stop && stop.lat !== undefined && stop.lon !== undefined) {
-                        // Create a custom colored icon based on clusters served
-                        const clusters = stop.clusters_served || [];
-                        
-                        // Use color-coded checkpoint markers with clear numbers
-                        const checkpointIcon = L.divIcon({
-                            className: 'checkpoint-icon-container', // Changed class name to avoid conflicts
-                            html: `<div class="cp-marker" style="
-                                      background-color: ${colors[index % colors.length]}; 
-                                      color: white; 
-                                      border-radius: 50%; 
-                                      width: 28px; 
-                                      height: 28px; 
-                                      display: flex; 
-                                      align-items: center; 
-                                      justify-content: center; 
+            // --- Marker Logic ---
+            // Add markers for stops (Checkpoints or Destinations)
+            const stopsToMark = isCheckpointRoute ? route.stops : (route.path || []).slice(1, -1);
+
+            if (stopsToMark && Array.isArray(stopsToMark)) {
+                stopsToMark.forEach((stop, stopIdx) => {
+                    if (stop && stop.lat !== undefined && (stop.lon !== undefined || stop.lng !== undefined)) {
+                        let markerIcon;
+                        let popupContent;
+                        const isDynamic = stop.is_dynamic === true; // Check the boolean flag from backend
+                        const type = stop.type; // 'pickup', 'dropoff', 'checkpoint', etc.
+
+                        // --- UPDATED LOGIC ---
+                        if (isDynamic && (type === 'pickup' || type === 'dropoff')) {
+                            // **Explicitly handle dynamic stops within checkpoint routes**
+                            const markerType = type === 'pickup' ? 'P' : 'D';
+                            const markerColor = type === 'pickup' ? 'darkorange' : 'purple';
+                            markerIcon = Utils.createSimpleIcon(markerType, markerColor);
+                            popupContent = `
+                                <div class="dynamic-stop-popup">
+                                    <h6>Dynamic ${type === 'pickup' ? 'Pickup' : 'Dropoff'} (Vehicle ${index + 1})</h6>
+                                    <p><strong>Coordinates:</strong> ${stop.lat.toFixed(5)}, ${stop.lon.toFixed(5)}</p>
+                                    <p><strong>Cluster:</strong> ${stop.cluster_id || 'N/A'}</p>
+                                    ${stop.address ? `<p><small>${stop.address.street || ''}, ${stop.address.city || ''}</small></p>` : ''}
+                                </div>`;
+
+                        } else if (isCheckpointRoute) {
+                            // Checkpoint markers (for non-dynamic stops in checkpoint routes)
+                            markerIcon = L.divIcon({
+                                className: 'checkpoint-icon-container',
+                                html: `<div class="cp-marker" style="
+                                      background-color: ${color};
+                                      color: white;
+                                      border-radius: 50%;
+                                      width: 28px;
+                                      height: 28px;
+                                      display: flex;
+                                      align-items: center;
+                                      justify-content: center;
                                       font-weight: bold;
                                       border: 2px solid white;
                                       box-shadow: 0 1px 3px rgba(0,0,0,0.4);">
                                     ${stopIdx + 1}
                                   </div>`,
-                            iconSize: [28, 28],
-                            iconAnchor: [14, 14], // Center the icon over the coordinates
-                            popupAnchor: [0, -14] // Position popup above the icon
-                        });
-                        
-                        // 2. Create a more detailed popup
-                        const marker = L.marker([stop.lat, stop.lon], { icon: checkpointIcon })
-                            .addTo(map)
-                            .bindPopup(`
+                                iconSize: [28, 28],
+                                iconAnchor: [14, 14],
+                                popupAnchor: [0, -14]
+                            });
+                            const clusters = stop.clusters_served || [];
+                            popupContent = `
                                 <div class="checkpoint-popup">
-                                    <h6>Checkpoint (Vehicle ${index + 1})</h6>
+                                    <h6>Checkpoint ${stopIdx + 1} (Vehicle ${index + 1})</h6>
                                     <p><strong>Coordinates:</strong> ${stop.lat.toFixed(5)}, ${stop.lon.toFixed(5)}</p>
                                     <p><strong>Serves clusters:</strong></p>
                                     <div class="cluster-badges">
                                         ${clusters.map(id => `<span class="badge bg-info me-1">${id}</span>`).join('')}
                                     </div>
-                                </div>
-                            `);
-                        
-                        // 3. Store reference to highlight on hover in results panel
-                        marker._checkpointIndex = stopIdx;
+                                </div>`;
+
+                        } else {
+                            // Static route destination markers (original logic for non-checkpoint routes)
+                            markerIcon = L.divIcon({
+                                className: 'destination-icon',
+                                html: `<div style="
+                                      background-color: ${color};
+                                      color: white;
+                                      border-radius: 50%;
+                                      width: 22px;
+                                      height: 22px;
+                                      display: flex;
+                                      align-items: center;
+                                      justify-content: center;
+                                      font-size: 12px;
+                                      font-weight: bold;
+                                      border: 1px solid white;">
+                                    ${stopIdx + 1}
+                                  </div>`,
+                                iconSize: [22, 22],
+                                iconAnchor: [11, 11]
+                            });
+                            popupContent = `Destination ${stopIdx + 1} (Vehicle ${index + 1})`;
+                        }
+                        // --- END UPDATED LOGIC ---
+
+
+                        const marker = L.marker([stop.lat, stop.lon || stop.lng], { icon: markerIcon })
+                            .addTo(map)
+                            .bindPopup(popupContent);
+
+                        // Store reference for interaction
+                        marker._stopIndex = stopIdx;
                         marker._routeIndex = index;
-                    }
-                });
-                
-                // 4. If you want to show the actual destinations within clusters:
-                if (solution.destinations) {
-                    solution.destinations.forEach(dest => {
-                        // Create small markers for actual destinations
-                        const destIcon = L.divIcon({
-                            className: 'destination-mini-icon',
-                            html: `<div style="background-color: #9e9e9e; 
-                                               width: 8px; 
-                                               height: 8px; 
-                                               border-radius: 50%;"></div>`,
-                            iconSize: [8, 8]
-                        });
-                        
-                        L.marker([dest.lat, dest.lon], { icon: destIcon })
-                            .addTo(map)
-                            .bindPopup(`Destination within Cluster ${dest.cluster_id}`);
-                    });
-                }
-            } else if (!isCheckpointRoute && route.destination_coords && Array.isArray(route.destination_coords)) {
-                // Static destination markers
-                route.destination_coords.forEach((dest_coord, stopIdx) => {
-                    if (dest_coord && dest_coord.lat !== undefined && dest_coord.lon !== undefined) {
-                        // Use route index for color/label if needed, here we use stop order number
-                        const icon = L.divIcon({
-                            className: 'destination-icon',
-                            html: stopIdx + 1, // Display stop number in sequence for this route
-                            iconSize: [16, 16],
-                            // Optionally add style based on route index 'index' if needed
-                            // style: `background-color: ${colors[index % colors.length]};` // Example
-                        });
-                        L.marker([dest_coord.lat, dest_coord.lon], { icon: icon })
-                            .addTo(map)
-                            .bindPopup(`Destination ${stopIdx + 1} (Route ${index + 1})`); // Add Route index
+                        marker._isDynamic = isDynamic; // Store flag
+
+                        window.routeLayers.push(marker);
                     }
                 });
             }
         });
     }
 
-    // --- Display Original Preset Destinations (for context) ---
-    if (solution.destinations && Array.isArray(solution.destinations)) {
-        solution.destinations.forEach(dest => {
+    // Add markers for original destinations (only if not a checkpoint route, to avoid clutter)
+    if (!isCheckpointRoute && solution.destinations && Array.isArray(solution.destinations)) {
+         solution.destinations.forEach(dest => {
             if (dest && dest.lat !== undefined && dest.lon !== undefined) {
                 const destIcon = L.divIcon({
                     className: 'original-destination-icon',
-                    html: `<div style="background-color: #9e9e9e; 
-                                       width: 8px; 
-                                       height: 8px; 
-                                       border-radius: 50%;"></div>`,
-                    iconSize: [8, 8]
+                    html: `<div style="
+                              background-color: #9e9e9e;
+                              width: 8px;
+                              height: 8px;
+                              border-radius: 50%;
+                              border: 1px solid #ffffff;">
+                          </div>`,
+                    iconSize: [8, 8],
+                    iconAnchor: [4, 4]
                 });
-                L.marker([dest.lat, dest.lon], { icon: destIcon })
+
+                const marker = L.marker([dest.lat, dest.lon], { icon: destIcon })
                     .addTo(map)
                     .bindPopup(`Original Location<br>Cluster: ${dest.cluster_id || 'N/A'}`);
+
+                window.routeLayers.push(marker);
             }
         });
     }
+
+    // Fit map bounds to show all routes if appropriate points exist
+    try {
+        if (window.routeLayers && window.routeLayers.length > 0) {
+            const group = new L.featureGroup(window.routeLayers.filter(layer =>
+                layer instanceof L.Polyline || layer instanceof L.Marker
+            ));
+
+            if (group.getBounds().isValid()) {
+                map.fitBounds(group.getBounds(), {
+                    padding: [50, 50], // Add padding
+                    maxZoom: 16 // Limit zoom level
+                });
+            }
+        }
+    } catch (e) {
+        console.error("Error fitting bounds:", e);
+    }
 }
 
-// NEW: Function to set up UI for dynamic insertion
-function setupDynamicInsertionUI(solution) {
-    const controlsDiv = document.getElementById('dynamic-insertion-controls');
-    if (!controlsDiv || !solution || !solution.routes || solution.routes.length === 0) {
-        controlsDiv.innerHTML = '<p class="text-muted">No routes available for dynamic insertion.</p>';
+// Helper function to populate insertion points for a given vehicle index
+function populateInsertionPoints(vehicleIndex, solution) {
+    const insertionPointSelect = document.getElementById('insertion-point-select');
+    if (!insertionPointSelect || !solution || !solution.routes || !solution.routes[vehicleIndex]) {
+        if (insertionPointSelect) insertionPointSelect.innerHTML = '<option value="-1">N/A</option>';
         return;
     }
 
-    // Assuming single vehicle for simplicity now, extend later if needed
-    const route = solution.routes[0];
-    if (!route.stops || route.stops.length === 0) {
-         controlsDiv.innerHTML = '<p class="text-muted">Route has no checkpoints for insertion.</p>';
-         return;
+    const route = solution.routes[vehicleIndex];
+    const isCheckpoint = route.stops && route.stops[0]?.type === 'checkpoint';
+    const stops = isCheckpoint ? route.stops : (route.path || []).slice(1, -1); // Use path for static, exclude warehouse
+
+    insertionPointSelect.innerHTML = ''; // Clear existing options
+
+    // Option to insert right after the warehouse
+    insertionPointSelect.innerHTML += `<option value="0">After Warehouse (Start)</option>`;
+
+    // Options to insert after each stop
+    stops.forEach((stop, index) => {
+        let label = `Stop ${index + 1}`;
+        if (isCheckpoint) {
+            label = `Checkpoint ${index + 1} (${stop.lat.toFixed(3)}, ${stop.lon.toFixed(3)})`;
+        } else {
+            label = `Destination ${index + 1} (${stop.lat.toFixed(3)}, ${stop.lon || stop.lng.toFixed(3)})`;
+        }
+        // The value represents inserting *after* this stop's index (relative to the stops array)
+        insertionPointSelect.innerHTML += `<option value="${index + 1}">After ${label}</option>`;
+    });
+}
+
+// Updated: Function to set up UI for dynamic insertion based on the current solution
+function setupDynamicInsertionUI(solution) {
+    const controlsDiv = document.getElementById('dynamic-insertion-controls');
+    if (!controlsDiv || !solution || !solution.routes || solution.routes.length === 0) {
+        controlsDiv.innerHTML = '<p class="text-muted small">No routes available for dynamic insertion.</p>';
+        return;
     }
 
-    let optionsHtml = '<option value="0">After Warehouse (Start)</option>'; // Insert after start
-    route.stops.forEach((stop, index) => {
-        optionsHtml += `<option value="${index + 1}">After Checkpoint ${index + 1} (${stop.lat.toFixed(4)}, ${stop.lon.toFixed(4)})</option>`;
-    });
+    // Vehicle Selection Dropdown
+    let vehicleSelectHtml = '';
+    if (solution.routes.length > 1) {
+        vehicleSelectHtml = `
+            <div class="form-group mb-2">
+                <label for="target-vehicle-select" class="form-label small">Target Vehicle:</label>
+                <select id="target-vehicle-select" class="form-select form-select-sm">
+        `;
+        solution.routes.forEach((route, index) => {
+            vehicleSelectHtml += `<option value="${index}">Vehicle ${index + 1}</option>`;
+        });
+        vehicleSelectHtml += `
+                </select>
+            </div>`;
+    } else {
+        vehicleSelectHtml = `<input type="hidden" id="target-vehicle-select" value="0">`;
+    }
+
+    // Insertion Point Selection Dropdown
+    const insertionPointHtml = `
+        <div class="form-group mb-2">
+            <label for="insertion-point-select" class="form-label small">Insert After:</label>
+            <select id="insertion-point-select" class="form-select form-select-sm">
+                <!-- Options will be populated dynamically -->
+                <option value="0">After Warehouse (Start)</option>
+            </select>
+        </div>`;
+
 
     controlsDiv.innerHTML = `
-        <div class="form-group mb-2">
-            <label for="insertion-point-select" class="form-label">Insert New Location(s) After:</label>
-            <select id="insertion-point-select" class="form-select form-select-sm">
-                ${optionsHtml}
-            </select>
-        </div>
-        <button id="insert-dynamic-btn" class="btn btn-warning btn-sm">
-            <i class="fas fa-plus-circle"></i> Insert & Recalculate Route
+        ${vehicleSelectHtml}
+        ${insertionPointHtml}
+        <button id="insert-dynamic-btn" class="btn btn-warning btn-sm mt-2" ${dynamicLocationPairs.length === 0 ? 'disabled' : ''}>
+            <i class="fas fa-calculator"></i> Insert & Recalculate Route
         </button>
+        <p class="text-muted small mt-1">Adds the new pairs to the selected vehicle's route after the chosen point.</p>
     `;
 
-    // Add event listener to the new button
+    // Add event listener to the vehicle select dropdown (if it exists)
+    const vehicleSelect = document.getElementById('target-vehicle-select');
+    if (vehicleSelect && solution.routes.length > 1) {
+        vehicleSelect.addEventListener('change', (event) => {
+            const selectedVehicleIndex = parseInt(event.target.value);
+            populateInsertionPoints(selectedVehicleIndex, solution);
+        });
+    }
+
+    // Populate insertion points for the initially selected vehicle (index 0)
+    populateInsertionPoints(0, solution);
+
+
+    // Add event listener to the insert button
     const insertBtn = document.getElementById('insert-dynamic-btn');
     if (insertBtn) {
         insertBtn.addEventListener('click', handleDynamicInsertion);
     }
 }
 
-// NEW: Function to handle the dynamic insertion request
+// Updated: Function to handle the dynamic insertion request
 function handleDynamicInsertion() {
-    const insertionIndex = parseInt(document.getElementById('insertion-point-select').value);
-    const dynamicLocationsText = document.getElementById('dynamic-locations-input').value.trim();
-    const newLocations = [];
+    const vehicleSelect = document.getElementById('target-vehicle-select');
+    const insertionPointSelect = document.getElementById('insertion-point-select'); // Get insertion point dropdown
 
-    if (!dynamicLocationsText) {
-        alert('Please enter dynamic locations (Lat,Lon) to insert.');
+    // Check if elements exist
+    if (!vehicleSelect || !insertionPointSelect) {
+        alert("Error: UI elements for insertion control not found.");
+        console.error("Missing vehicleSelect or insertionPointSelect elements.");
         return;
     }
 
-    // Parse dynamic locations (similar to runStaticDynamicComparison)
-    const lines = dynamicLocationsText.split('\n');
-    lines.forEach((line, index) => {
-        const parts = line.split(',');
-        if (parts.length === 2) {
-            const lat = parseFloat(parts[0].trim());
-            const lon = parseFloat(parts[1].trim());
-            if (!isNaN(lat) && !isNaN(lon)) {
-                newLocations.push({ id: `dynamic_insert_${index + 1}`, lat: lat, lon: lon });
-            } else { console.warn(`Invalid coordinate format on line ${index + 1}: ${line}`); }
-        } else { console.warn(`Skipping invalid line ${index + 1}: ${line}`); }
+    const targetVehicleIndex = parseInt(vehicleSelect.value);
+    const insertionPointValue = insertionPointSelect.value; // Get the raw value first
+    console.log("Raw insertion point value:", insertionPointValue); // Log raw value
+    const insertionPointIndex = parseInt(insertionPointValue); // Get selected insertion index
+
+    // Check if parsing resulted in NaN (e.g., if value is empty or not a number)
+    if (isNaN(targetVehicleIndex)) {
+         alert("Error: Invalid vehicle selected.");
+         console.error("targetVehicleIndex is NaN. Value:", vehicleSelect.value);
+         return;
+    }
+    if (isNaN(insertionPointIndex)) {
+         alert("Error: Invalid insertion point selected. Please ensure an option is chosen.");
+         console.error("insertionPointIndex is NaN. Value:", insertionPointValue);
+         return;
+    }
+    console.log("Parsed insertion point index:", insertionPointIndex); // Log parsed value
+
+    // Check if pairs exist
+    if (!dynamicLocationPairs || dynamicLocationPairs.length === 0) {
+        alert("Error: No dynamic location pairs have been added.");
+        return;
+    }
+
+    // Check if current solution and config are available
+    if (!currentVrpSolution || !currentTestConfig) {
+        alert("Error: Missing current solution or test configuration context.");
+        return;
+    }
+
+    // Show loading state
+    const insertBtn = document.getElementById('insert-dynamic-btn');
+    if (insertBtn) {
+        insertBtn.disabled = true;
+        insertBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Inserting...';
+    }
+
+    const url = '/vrp_testing/insert_dynamic';
+    const requestData = {
+        current_solution: currentVrpSolution,
+        prepared_data_ref: {
+             snapshot_id: currentTestConfig.snapshot_id,
+             preset_id: currentTestConfig.preset_id,
+             api_key: currentTestConfig.api_key // Pass API key if needed by prepare_test_data
+        },
+        new_location_pairs: dynamicLocationPairs,
+        target_vehicle_index: targetVehicleIndex,
+        insertion_point_index: insertionPointIndex, // Ensure this is correctly obtained and passed
+        algorithm: currentTestConfig.algorithm || 'or_tools' // Default algorithm if not set
+    };
+
+    // Log the exact data being sent
+    console.log('Sending dynamic insertion request data:', JSON.stringify(requestData, null, 2));
+
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Dynamic insertion response:', data);
+        if (data.status === 'success') {
+            currentVrpSolution = data.updated_solution; // Update the global solution
+            currentTestConfig.test_type = 'dynamic_updated'; // Update test type if needed
+            // Redisplay results AND update insertion UI based on the NEW solution
+            displayTestResults(data.updated_solution, 'dynamic');
+            alert('Route updated successfully with dynamic locations.');
+            // Clear dynamic pairs after successful insertion
+            dynamicLocationPairs = [];
+            const dynamicList = document.getElementById('dynamic-locations-list');
+            if (dynamicList) dynamicList.innerHTML = '';
+            // Button state will be reset by setupDynamicInsertionUI called within displayTestResults
+        } else {
+            alert(`Error inserting dynamic locations: ${data.message}`);
+            // Restore previous view AND insertion UI if needed (displayTestResults handles this)
+            displayTestResults(currentVrpSolution, 'dynamic');
+        }
+    })
+    .catch(error => {
+        console.error('Error during dynamic insertion fetch:', error);
+        alert('Network error or server issue during dynamic insertion.');
+         // Restore previous view AND insertion UI
+        displayTestResults(currentVrpSolution, 'dynamic');
+    })
+    .finally(() => {
+         // Button state is handled by displayTestResults calling setupDynamicInsertionUI again
+         // Ensure button is re-enabled if it wasn't re-created (though it should be)
+         const finalInsertBtn = document.getElementById('insert-dynamic-btn');
+         if (finalInsertBtn) {
+             finalInsertBtn.disabled = (dynamicLocationPairs.length === 0); // Disable if no pairs left
+             finalInsertBtn.innerHTML = '<i class="fas fa-calculator"></i> Insert & Recalculate Route';
+         }
     });
-
-    if (newLocations.length === 0) {
-        alert('No valid dynamic locations entered.');
-        return;
-    }
-
-    if (window.currentVrpSolution && window.currentTestConfig) {
-        // Show loading state
-        const btn = document.getElementById('insert-dynamic-btn');
-        const originalText = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Inserting...';
-        document.getElementById('results-content').innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Recalculating route...</div>';
-
-
-        const url = '/vrp_testing/insert_dynamic';
-        const requestData = {
-            current_solution: window.currentVrpSolution, // Send the whole current solution
-            prepared_data_ref: { // Send references to recreate prepared_data if needed
-                 snapshot_id: window.currentTestConfig.snapshot_id,
-                 preset_id: window.currentTestConfig.preset_id
-            },
-            insertion_index: insertionIndex, // Where to insert *after* (0=after warehouse, 1=after 1st CP, etc.)
-            new_locations: newLocations,
-            num_vehicles: window.currentTestConfig.num_vehicles, // Pass original config
-            algorithm: window.currentTestConfig.algorithm
-        };
-
-        console.log('Sending dynamic insertion request:', requestData);
-
-        fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log('Dynamic insertion response:', data);
-            if (data.status === 'success') {
-                // Update the stored solution and redisplay
-                window.currentVrpSolution = data.updated_solution;
-                displayTestResults(data.updated_solution, 'dynamic'); // Redisplay as dynamic
-                setupDynamicInsertionUI(data.updated_solution); // Re-setup UI with new route
-                alert('Route updated with dynamic locations.');
-            } else {
-                alert(`Error inserting dynamic locations: ${data.message}`);
-                // Restore previous view?
-                displayTestResults(window.currentVrpSolution, 'dynamic');
-                setupDynamicInsertionUI(window.currentVrpSolution);
-            }
-        })
-        .catch(error => {
-            console.error('Dynamic insertion error:', error);
-            alert('An error occurred during dynamic insertion.');
-            // Restore previous view?
-            displayTestResults(window.currentVrpSolution, 'dynamic');
-            setupDynamicInsertionUI(window.currentVrpSolution);
-        })
-        .finally(() => {
-             // Restore button state (or maybe remove it if insertion is one-time?)
-             btn.disabled = false;
-             btn.innerHTML = originalText;
-        });
-
-    } else {
-        alert('Cannot perform dynamic insertion: Initial solution data not found.');
-    }
 }
 
 // Add defensive checks to loadTestHistory

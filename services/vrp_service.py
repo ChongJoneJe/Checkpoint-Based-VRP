@@ -10,7 +10,24 @@ from flask import current_app
 
 class VRPService:
     """Service for Vehicle Routing Problem operations"""
-    
+    _ors_client = None
+
+    @staticmethod
+    def _get_ors_client(): # Removed api_key_override argument
+        """Helper to get a cached ORS client instance using config."""
+        if VRPService._ors_client is None:
+            api_key = current_app.config.get('ORS_API_KEY')
+            if api_key:
+                try:
+                    VRPService._ors_client = openrouteservice.Client(key=api_key)
+                    print("[DEBUG _get_ors_client] OpenRouteService client initialized successfully.")
+                except Exception as e:
+                    print(f"[ERROR _get_ors_client] Failed to initialize OpenRouteService client: {e}")
+                    VRPService._ors_client = None
+            else:
+                print("[WARN _get_ors_client] ORS_API_KEY not configured.")
+        return VRPService._ors_client
+
     @staticmethod
     def solve_vrp(warehouse, destinations, num_vehicles=1, algorithm='nearest_neighbor', api_key=None, get_detailed_geometry=True):
         """Solve static VRP using specified algorithm."""
@@ -145,134 +162,169 @@ class VRPService:
             }
     
     @staticmethod
-    def get_detailed_path(route_coords, api_key=None):
+    def get_detailed_path(route_coords_list, api_key=None):
         """
-        Get detailed path between a sequence of coordinates with improved rate limit handling
+        Get detailed path between a sequence of coordinates with improved rate limit handling,
+        handling both list-of-lists [lat, lon] and list-of-dicts {'lat': ..., 'lon': ...}.
         """
-        if not api_key:
-            print("[DEBUG] No API key provided, using Haversine distances")
-            return {
-                'path': None,
-                'distance': sum(VRPService._haversine_distance(
-                    route_coords[i][0], route_coords[i][1],
-                    route_coords[i+1][0], route_coords[i+1][1]
-                ) for i in range(len(route_coords) - 1))
-            }
-            
-        try:
-            print(f"[DEBUG] OpenRouteService request with {len(route_coords)} coordinates")
-            client = openrouteservice.Client(key=api_key)
-            
-            # OpenRouteService expects [lon, lat] format
-            ors_coords = [[point[1], point[0]] for point in route_coords]
-            
-            # Check if we have too many coordinates
-            if len(ors_coords) > 50:  # ORS has a limit on the number of waypoints
-                print(f"[DEBUG] Splitting {len(ors_coords)} coordinates into segments (max 50 per request)")
-                
-                # Split into segments
-                segments = []
-                for i in range(0, len(ors_coords), 49):
-                    segment = ors_coords[i:i+50]
-                    if len(segment) >= 2:  # Need at least start and end
-                        segments.append(segment)
-                
-                print(f"[DEBUG] Created {len(segments)} segments")
-                
-                # Process each segment
-                combined_geometry = []
-                total_distance = 0
-                
-                for idx, segment in enumerate(segments):
-                    print(f"[DEBUG] Processing segment {idx+1}/{len(segments)} with {len(segment)} points")
-                    
-                    # Use exponential backoff for rate limit handling
-                    max_retries = 5
-                    retry_delay = 1.0
-                    
-                    for retry in range(max_retries):
-                        try:
-                            print(f"[DEBUG] API call attempt {retry+1}/{max_retries}")
-                            route = client.directions(
-                                coordinates=segment,
-                                profile='driving-car',
-                                format='geojson',
-                                optimize_waypoints=False
-                            )
-                            break
-                        except Exception as e:
-                            if retry < max_retries - 1:
-                                wait_time = retry_delay * (2 ** retry) + random.random()
-                                print(f"[DEBUG] API error: {str(e)}. Retrying in {wait_time:.2f} seconds")
-                                time.sleep(wait_time)
-                            else:
-                                print(f"[DEBUG] Max retries reached. Error: {str(e)}")
-                                raise
-                    
-                    if 'features' in route and len(route['features']) > 0:
-                        feature = route['features'][0]
-                        combined_geometry.extend(feature['geometry']['coordinates'])
-                        segment_distance = feature['properties']['segments'][0]['distance'] / 1000
-                        total_distance += segment_distance
-                        print(f"[DEBUG] Segment {idx+1} distance: {segment_distance:.2f} km")
-                    
-                    # Sleep to avoid rate limiting
-                    time.sleep(1.0 + random.random())
-                
-                return {
-                    'path': combined_geometry,
-                    'distance': total_distance
-                }
-            else:
-                print(f"[DEBUG] Single request for {len(ors_coords)} points")
-                
-                # Try up to 5 times with exponential backoff
-                max_retries = 5
-                for retry in range(max_retries):
-                    try:
-                        print(f"[DEBUG] API call attempt {retry+1}/{max_retries}")
-                        route = client.directions(
-                            coordinates=ors_coords,
-                            profile='driving-car',
-                            format='geojson',
-                            optimize_waypoints=False
-                        )
-                        break
-                    except Exception as e:
-                        if retry < max_retries - 1:
-                            wait_time = 1.0 * (2 ** retry) + random.random()
-                            print(f"[DEBUG] API error: {str(e)}. Retrying in {wait_time:.2f} seconds")
-                            time.sleep(wait_time)
-                        else:
-                            print(f"[DEBUG] Max retries reached. Error: {str(e)}")
-                            raise
-                
-                if 'features' in route and len(route['features']) > 0:
-                    feature = route['features'][0]
-                    route_distance = feature['properties']['segments'][0]['distance'] / 1000
-                    print(f"[DEBUG] Route distance: {route_distance:.2f} km")
-                    
-                    return {
-                        'path': feature['geometry']['coordinates'],
-                        'distance': route_distance
-                    }
-                
+        if not route_coords_list or len(route_coords_list) < 2:
+            return {'path': [], 'distance': 0.0}
+
+        # --- Input Type Handling ---
+        # Convert input to a standardized list of [lat, lon] lists
+        standardized_coords = []
+        is_dict_input = False
+        if isinstance(route_coords_list[0], dict):
+            is_dict_input = True
+            for point in route_coords_list:
+                if isinstance(point, dict) and 'lat' in point and 'lon' in point:
+                    standardized_coords.append([float(point['lat']), float(point['lon'])])
+                else:
+                    print(f"[WARN get_detailed_path] Skipping invalid dict format: {point}")
+            if len(standardized_coords) < 2:
+                 print("[WARN get_detailed_path] Not enough valid dict coordinates after extraction.")
+                 return {'path': None, 'distance': 0}
+        elif isinstance(route_coords_list[0], (list, tuple)) and len(route_coords_list[0]) == 2:
+            # Assume input is already list of [lat, lon] or similar
+            standardized_coords = [[float(p[0]), float(p[1])] for p in route_coords_list]
+        else:
+            print(f"[ERROR get_detailed_path] Unrecognized coordinate format: {route_coords_list[0]}")
             return {'path': None, 'distance': 0}
-        except Exception as e:
-            print(f"[DEBUG] OpenRouteService API error: {str(e)}")
-            print("[DEBUG] Falling back to Haversine distances")
-            
-            # Calculate distance using Haversine formula
-            total_distance = 0
-            for i in range(len(route_coords) - 1):
-                segment_distance = VRPService._haversine_distance(
-                    route_coords[i][0], route_coords[i][1],
-                    route_coords[i+1][0], route_coords[i+1][1]
+        # --- End Input Type Handling ---
+
+
+        # --- Get the ORS client using the corrected helper ---
+        client = VRPService._get_ors_client() # Call without argument
+        if not client:
+            print("[WARN get_detailed_path] ORS client not available. Calculating Haversine distance as fallback.")
+            # Fallback: Calculate total Haversine distance, return None for path
+            total_distance = 0.0
+            for i in range(len(route_coords_list) - 1):
+                p1 = route_coords_list[i]
+                p2 = route_coords_list[i+1]
+                if p1 and p2 and 'lat' in p1 and 'lon' in p1 and 'lat' in p2 and 'lon' in p2:
+                     try:
+                          total_distance += VRPService._haversine_distance(float(p1['lat']), float(p1['lon']), float(p2['lat']), float(p2['lon']))
+                     except (ValueError, TypeError):
+                          print(f"[WARN get_detailed_path] Haversine fallback: Coordinate conversion error in segment {i}. Skipping.")
+            return {'path': None, 'distance': total_distance} # Return None path and Haversine distance
+        # ---
+
+        combined_geometry = []
+        total_distance = 0.0
+        first_segment = True
+
+        try:
+            for idx in range(len(route_coords_list) - 1):
+                coords1 = route_coords_list[idx]
+                coords2 = route_coords_list[idx+1]
+
+                if not all(k in coords1 for k in ('lat', 'lon')) or not all(k in coords2 for k in ('lat', 'lon')):
+                     print(f"[WARN get_detailed_path] Skipping segment {idx+1} due to missing coordinates.")
+                     continue
+
+                coords1_lonlat = [coords1['lon'], coords1['lat']]
+                coords2_lonlat = [coords2['lon'], coords2['lat']]
+
+                # Use the 'client' obtained above
+                segment_result = client.directions(
+                    coordinates=[coords1_lonlat, coords2_lonlat],
+                    profile='driving-car',
+                    format='geojson',
+                    instructions=False,
+                    geometry=True
                 )
-                total_distance += segment_distance
-                
+
+                if segment_result and 'features' in segment_result and segment_result['features']:
+                    feature = segment_result['features'][0]
+                    segment_geometry_lonlat = feature.get('geometry', {}).get('coordinates', [])
+                    segment_distance_meters = feature.get('properties', {}).get('summary', {}).get('distance', 0)
+
+                    if segment_geometry_lonlat:
+                        # Convert [lon, lat] to [lat, lon] for Leaflet
+                        segment_geometry_latlon = [[coord[1], coord[0]] for coord in segment_geometry_lonlat]
+
+                        # Append geometry, avoiding duplication of the connecting point
+                        start_index = 1 if not first_segment else 0
+                        combined_geometry.extend(segment_geometry_latlon[start_index:])
+                        first_segment = False
+
+                        total_distance += (segment_distance_meters / 1000.0) # Accumulate distance in km
+                        # print(f"[DEBUG get_detailed_path] Segment {idx+1} distance: {segment_distance_meters / 1000.0:.2f} km")
+                    else:
+                        print(f"[WARN get_detailed_path] Segment {idx+1} returned no geometry features.")
+                        # If a segment fails, the combined path might become disjointed.
+                        # Consider if a full fallback is better here. For now, just skip.
+                else:
+                    print(f"[WARN get_detailed_path] Segment {idx+1} ORS request failed or returned empty features.")
+                        # Optionally: Fallback to Haversine for this segment? Or just skip? Skipping for now.
+
+                    # Sleep briefly between requests to respect rate limits
+                    time.sleep(0.5 + random.random() * 0.5) # Adjust sleep time as needed
+
+                print(f"[DEBUG get_detailed_path] Finished processing segments. Total distance: {total_distance:.2f} km")
+                return {'path': combined_geometry, 'distance': total_distance}
+
+        except openrouteservice.exceptions.ApiError as api_err:
+            print(f"[ERROR get_detailed_path] ORS API error: {api_err}. Status: {api_err.status_code}. Message: {api_err.message}")
+            # Fallback for the whole path on API error
+            total_distance = sum(VRPService._haversine_distance(float(route_coords_list[i]['lat']), float(route_coords_list[i]['lon']), float(route_coords_list[i+1]['lat']), float(route_coords_list[i+1]['lon']))
+                                    for i in range(len(route_coords_list) - 1)
+                                    if all(k in route_coords_list[i] for k in ('lat','lon')) and all(k in route_coords_list[i+1] for k in ('lat','lon')))
             return {'path': None, 'distance': total_distance}
-    
+        
+        except Exception as e:
+            print(f"[ERROR get_detailed_path] Unexpected error during ORS directions: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback for the whole path on unexpected error
+            total_distance = sum(VRPService._haversine_distance(float(route_coords_list[i]['lat']), float(route_coords_list[i]['lon']), float(route_coords_list[i+1]['lat']), float(route_coords_list[i+1]['lon']))
+                                    for i in range(len(route_coords_list) - 1)
+                                    if all(k in route_coords_list[i] for k in ('lat','lon')) and all(k in route_coords_list[i+1] for k in ('lat','lon')))
+            return {'path': None, 'distance': total_distance}
+
+        # Return combined geometry and total distance
+        return {'path': combined_geometry, 'distance': total_distance}
+
+    @staticmethod
+    def _fetch_ors_directions_with_retry(client, coordinates, max_retries=5, initial_delay=0.5):
+        """Helper to fetch ORS directions with exponential backoff."""
+        for attempt in range(max_retries):
+            try:
+                # print(f"[DEBUG _fetch_ors] Attempt {attempt+1}/{max_retries}") # Optional detailed logging
+                route = client.directions(
+                    coordinates=coordinates,
+                    profile='driving-car',
+                    format='geojson',
+                    geometry='true' # Ensure geometry is requested
+                    # optimize_waypoints=False # Usually false for pre-defined sequence
+                )
+                return route # Success
+            except openrouteservice.exceptions.ApiError as api_error:
+                # Check for rate limit or server errors (e.g., 429, 5xx)
+                if api_error.status_code == 429 or api_error.status_code >= 500:
+                    if attempt < max_retries - 1:
+                        wait_time = initial_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                        print(f"[WARN _fetch_ors] ORS API error (Status {api_error.status_code}). Retrying in {wait_time:.2f}s...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"[ERROR _fetch_ors] Max retries reached after ORS API error (Status {api_error.status_code}).")
+                        raise api_error # Re-raise after max retries
+                else:
+                    # For other API errors (e.g., 400 Bad Request), don't retry
+                    print(f"[ERROR _fetch_ors] ORS API Error (Status {api_error.status_code}): {api_error.message}")
+                    raise api_error
+            except Exception as e:
+                # Handle other potential exceptions (network issues, etc.)
+                if attempt < max_retries - 1:
+                     wait_time = initial_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                     print(f"[WARN _fetch_ors] Non-API error during ORS request: {e}. Retrying in {wait_time:.2f}s...")
+                     time.sleep(wait_time)
+                else:
+                     print(f"[ERROR _fetch_ors] Max retries reached after non-API error: {e}")
+                     raise e # Re-raise after max retries
+        return None # Should not be reached if exceptions are raised correctly
+
     @staticmethod
     def _haversine_distance(lat1, lon1, lat2, lon2):
         """Calculate the Haversine distance between two points in kilometers"""
@@ -356,97 +408,83 @@ class VRPService:
             return None
 
     @staticmethod
-    def _get_ors_client(api_key=None):
-        """Gets an ORS client instance."""
-        if not api_key:
-            api_key = current_app.config.get('ORS_API_KEY')
-        if not api_key:
-            print("[WARN _get_ors_client] ORS API key not available.")
-            return None
-        try:
-            return openrouteservice.Client(key=api_key)
-        except Exception as e:
-            print(f"[ERROR _get_ors_client] Failed to create ORS client: {e}")
+    def get_detailed_route_geometry(path_sequence, api_key=None): # Keep api_key param for potential future use
+        """
+        Fetches detailed route geometry segment by segment for a given path sequence.
+        path_sequence: List of location dicts {'lat': ..., 'lon': ..., 'type': ...}
+        Returns: List of [lat, lon] coordinates for the full path, or None on failure.
+        """
+        if not path_sequence or len(path_sequence) < 2:
             return None
 
-    @staticmethod
-    def get_detailed_route_geometry(coords_sequence, api_key=None):
-        """
-        Gets detailed route geometry from ORS Directions API for a sequence of coordinates.
-
-        Args:
-            coords_sequence (list): List of coordinate dicts [{'lat': float, 'lon': float}, ...].
-            api_key (str, optional): ORS API key. Defaults to config.
-
-        Returns:
-            list: List of [lat, lon] points for the detailed path, or None if failed.
-        """
-        # --- ADD DEBUG ---
-        print(f"[DEBUG get_detailed_route_geometry] Function called with {len(coords_sequence)} coordinates.")
-        # print(f"[DEBUG get_detailed_route_geometry] Coords: {coords_sequence}") # Optional: print full list if needed
-        # --- END DEBUG ---
-
-        if len(coords_sequence) < 2:
-            print("[DEBUG get_detailed_route_geometry] Too few coordinates, returning None.") # Add debug
-            return None # Cannot route with fewer than 2 points
-
-        client = VRPService._get_ors_client(api_key)
+        client = VRPService._get_ors_client() # Use cached/config client
         if not client:
-            print("[ERROR get_detailed_route_geometry] ORS client not available.")
+            print("[WARN get_detailed_route_geometry] ORS client not available.")
             return None
 
-        # ORS expects [lon, lat]
-        ors_coords = [[float(p['lon']), float(p['lat'])] for p in coords_sequence]
+        full_detailed_geometry = []
+        total_distance_km = 0.0
+        segments_failed = 0
 
         try:
-            print(f"[DEBUG get_detailed_route_geometry] Requesting ORS directions for {len(ors_coords)} points.")
-            # Note: ORS Directions has waypoint limits (typically 50).
-            # This simple version doesn't handle splitting large routes yet.
-            # Consider adding segmentation logic similar to the old get_detailed_path if needed.
-            if len(ors_coords) > 50:
-                 print(f"[WARN get_detailed_route_geometry] Route has {len(ors_coords)} waypoints, exceeding typical ORS limit of 50. Request might fail or be slow. Segmentation not implemented here.")
+            num_segments = len(path_sequence) - 1
+            for j in range(num_segments):
+                is_last_segment = (j == num_segments - 1)
+                p1 = path_sequence[j]
+                p2 = path_sequence[j+1]
 
-            route_result = client.directions(
-                coordinates=ors_coords,
-                profile='driving-car',
-                geometry='true', # Request geometry
-                format='geojson' # GeoJSON includes coordinates directly
-            )
+                if not all(k in p1 for k in ('lat', 'lon')) or not all(k in p2 for k in ('lat', 'lon')):
+                    print(f"[WARN get_detailed_route_geometry] Skipping segment {j+1} due to missing coordinates.")
+                    segments_failed += 1
+                    continue
 
-            # Extract geometry coordinates
-            if route_result and 'features' in route_result and route_result['features']:
-                geometry = route_result['features'][0].get('geometry')
-                if geometry and geometry.get('type') == 'LineString':
-                    # Coordinates are [lon, lat], swap back to [lat, lon] for Leaflet
-                    detailed_path = [[coord[1], coord[0]] for coord in geometry['coordinates']]
-                    # --- ADD DEBUG ---
-                    print(f"[DEBUG get_detailed_route_geometry] Returning detailed path with {len(detailed_path)} points.")
-                    # --- END DEBUG ---
-                    return detailed_path
+                coords1_lonlat = [p1['lon'], p1['lat']]
+                coords2_lonlat = [p2['lon'], p2['lat']]
+
+                if is_last_segment:
+                     print(f"[DEBUG get_detailed_route_geometry] Requesting ORS directions for LAST segment {j+1}/{num_segments} ({p1.get('type','?')}:{p1.get('matrix_idx','?')} -> {p2.get('type','?')}:{p2.get('matrix_idx','?')})...")
+
+                segment_result = client.directions(
+                    coordinates=[coords1_lonlat, coords2_lonlat],
+                    profile='driving-car',
+                    format='geojson',
+                    instructions=False,
+                    geometry=True
+                )
+
+                if segment_result and 'features' in segment_result and segment_result['features']:
+                    feature = segment_result['features'][0]
+                    segment_geometry_lonlat = feature.get('geometry', {}).get('coordinates', [])
+                    segment_distance_meters = feature.get('properties', {}).get('summary', {}).get('distance', 0)
+
+                    if segment_geometry_lonlat:
+                        segment_geometry_latlon = [[coord[1], coord[0]] for coord in segment_geometry_lonlat]
+                        start_index = 1 if j > 0 else 0
+                        full_detailed_geometry.extend(segment_geometry_latlon[start_index:])
+                        total_distance_km += (segment_distance_meters / 1000.0)
+                        if is_last_segment:
+                             print(f"[DEBUG get_detailed_route_geometry] LAST segment {j+1} successfully processed. Geometry points added: {len(segment_geometry_latlon[start_index:])}")
+                    else:
+                        print(f"[WARN get_detailed_route_geometry] Segment {j+1} returned no geometry. Path may be disjointed.")
+                        segments_failed += 1
                 else:
-                     print("[WARN get_detailed_route_geometry] ORS response missing LineString geometry.")
-                     # --- ADD DEBUG ---
-                     print("[DEBUG get_detailed_route_geometry] Returning None (missing geometry).")
-                     # --- END DEBUG ---
-                     return None
-            else:
-                print("[WARN get_detailed_route_geometry] ORS directions response format unexpected or empty.")
-                # --- ADD DEBUG ---
-                print("[DEBUG get_detailed_route_geometry] Returning None (bad response format).")
-                # --- END DEBUG ---
-                return None
+                    segments_failed += 1
+                    if is_last_segment:
+                         print(f"[WARN get_detailed_route_geometry] LAST segment {j+1} ORS request failed or returned empty features. Return-to-warehouse path may be missing.")
+                    else:
+                         print(f"[WARN get_detailed_route_geometry] Segment {j+1} ORS request failed or returned empty features. Path may be disjointed.")
 
-        except openrouteservice.exceptions.ApiError as api_error:
-            print(f"[ERROR get_detailed_route_geometry] ORS API Error: {api_error}. Status: {api_error.status_code}. Message: {api_error.message}")
-            # --- ADD DEBUG ---
-            print("[DEBUG get_detailed_route_geometry] Returning None (API Error).")
-            # --- END DEBUG ---
-            return None
+        except openrouteservice.exceptions.ApiError as api_err:
+            print(f"[ERROR get_detailed_route_geometry] ORS API error during directions: {api_err}.")
+            return None # Indicate failure
         except Exception as e:
-            print(f"[ERROR get_detailed_route_geometry] Unexpected error: {e}")
+            print(f"[ERROR get_detailed_route_geometry] Unexpected error during ORS directions: {e}")
             import traceback
             traceback.print_exc()
-            # --- ADD DEBUG ---
-            print("[DEBUG get_detailed_route_geometry] Returning None (Unexpected Error).")
-            # --- END DEBUG ---
-            return None
+            return None # Indicate failure
+
+        if segments_failed > 0:
+             print(f"[WARN get_detailed_route_geometry] Finished processing segments, but {segments_failed} segment(s) failed to return geometry.")
+
+        print(f"[DEBUG get_detailed_route_geometry] Finished processing {num_segments} segments. Total points: {len(full_detailed_geometry)}. Failures: {segments_failed}.")
+        return full_detailed_geometry if full_detailed_geometry else None
