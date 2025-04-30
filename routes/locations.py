@@ -38,7 +38,7 @@ def save_locations():
         })
     except Exception as e:
         import traceback
-        traceback.print_exc()  # Print full traceback for debugging
+        traceback.print_exc()  
         return jsonify({
             "status": "error", 
             "message": f"Error saving locations: {str(e)}"

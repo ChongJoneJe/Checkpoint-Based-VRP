@@ -10,7 +10,6 @@ try:
 except ImportError:
     HAS_ORTOOLS = False
     print("WARNING: Google OR-Tools not installed. OR-Tools algorithm will not be available for checkpoint VRP.")
-    # Define dummy classes/enums if OR-Tools is not installed
     class routing_enums_pb2:
         class FirstSolutionStrategy:
             PATH_CHEAPEST_ARC = None
@@ -65,15 +64,13 @@ class EnhancedVehicleRoutingProblem:
         start_time = time.time()
         options = options or {}
 
-        # --- Data Extraction ---
-        warehouse = prepared_data.get('warehouse') # Should always be present
-        checkpoints = prepared_data.get('active_routing_checkpoints', []) # Intermediate nodes for full VRP
+        warehouse = prepared_data.get('warehouse') 
+        checkpoints = prepared_data.get('active_routing_checkpoints', []) 
         distance_matrix = prepared_data.get('checkpoint_distance_matrix')
-        required_clusters = set(prepared_data.get('required_clusters', [])) # For full VRP cluster coverage check
-        checkpoint_to_clusters = prepared_data.get('checkpoint_to_clusters', {}) # For full VRP cluster coverage check
-        subproblem_locations_list = prepared_data.get('subproblem_locations') # Full list for subproblems
+        required_clusters = set(prepared_data.get('required_clusters', [])) 
+        checkpoint_to_clusters = prepared_data.get('checkpoint_to_clusters', {}) 
+        subproblem_locations_list = prepared_data.get('subproblem_locations') 
 
-        # --- Initial Validation ---
         if warehouse is None:
              print("[ERROR EnhancedVRP solve] Warehouse data is missing.")
              # Cannot proceed without warehouse context
@@ -87,14 +84,11 @@ class EnhancedVehicleRoutingProblem:
                 'error': 'Distance matrix missing or invalid.', 'algorithm_used': algorithm
             }
 
-        # --- Determine Problem Size and Node Mapping ---
         num_locations = 0
         if subproblem_locations_list is not None and isinstance(subproblem_locations_list, list):
-            # If subproblem_locations is provided, use its length
             num_locations = len(subproblem_locations_list)
             print(f"[DEBUG EnhancedVRP solve] Using num_locations from subproblem_locations: {num_locations}")
         elif distance_matrix is not None:
-             # Otherwise, use the matrix dimension (should match for full VRP)
              num_locations = distance_matrix.shape[0]
              print(f"[DEBUG EnhancedVRP solve] Using num_locations from distance_matrix shape: {num_locations}")
         else:
@@ -106,7 +100,6 @@ class EnhancedVehicleRoutingProblem:
              print("[ERROR EnhancedVRP solve] Number of locations is zero.")
              return {'error': 'Number of locations is zero.', 'computation_time': time.time() - start_time}
 
-        # Create a map from matrix index (0 to num_locations-1) to location data
         node_indices_map = {}
         if subproblem_locations_list is not None:
              # For subproblems, the indices relate directly to the subproblem_locations list
@@ -132,7 +125,6 @@ class EnhancedVehicleRoutingProblem:
 
         print(f"[DEBUG EnhancedVRP solve] Final num_locations for solver: {num_locations}")
 
-        # --- Algorithm Setup ---
         routes_checkpoint_indices = []
         total_distance_calculated = 0.0
         solver_error = None
@@ -143,7 +135,6 @@ class EnhancedVehicleRoutingProblem:
             print("[DEBUG EnhancedVRP solve] Mapping UI algorithm 'two_opt' to 'heuristic' + 2-Opt refinement.")
             effective_algorithm = 'heuristic'
 
-        # --- Main Solving Logic ---
         try:
             # Determine if it's a subproblem and get parameters
             is_subproblem = options.get('is_subproblem', False)
@@ -151,7 +142,7 @@ class EnhancedVehicleRoutingProblem:
             end_node = options.get('end_node', num_locations - 1 if is_subproblem else 0)
             current_num_vehicles = 1 if is_subproblem else self.num_vehicles
             pickup_delivery_pairs = options.get('pickup_delivery_pairs', []) if is_subproblem else []
-
+            mandatory_nodes = options.get('mandatory_nodes', []) if is_subproblem else []
 
             # Validate start/end node indices passed from options using the CORRECTED num_locations
             if not (0 <= start_node < num_locations):
@@ -159,7 +150,6 @@ class EnhancedVehicleRoutingProblem:
             if not (0 <= end_node < num_locations):
                  raise ValueError(f"Invalid end_node ({end_node}) received in options for problem with {num_locations} locations.")
 
-            # --- OR-Tools Solver Path ---
             if algorithm == 'or_tools':
                 effective_algorithm_used = 'or_tools' # Confirm attempt
                 if not HAS_ORTOOLS:
@@ -199,7 +189,7 @@ class EnhancedVehicleRoutingProblem:
                                 return int(distance_matrix[from_node][to_node] * 1000) # Use integers (e.g., meters)
                             else:
                                 print(f"[ERROR distance_callback] Invalid node indices: {from_node}, {to_node} for matrix shape {distance_matrix.shape}")
-                                return 999999999 # Penalize invalid access
+                                return 999999999 
 
                         transit_callback_index = routing.RegisterTransitCallback(distance_callback)
                         routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
@@ -209,15 +199,49 @@ class EnhancedVehicleRoutingProblem:
                         max_route_distance_meters_scaled = 100 * 1000 * 1000
                         routing.AddDimension(
                             transit_callback_index,
-                            0,  # no slack allowed
+                            0,  
                             max_route_distance_meters_scaled,
                             True,  
                             dimension_name)
                         distance_dimension = routing.GetDimensionOrDie(dimension_name)
-                        # distance_dimension.SetGlobalSpanCostCoefficient(100)
 
-                        routing.SetFixedCostOfVehicle(0, 0) # No fixed cost for vehicles
-                        # Pickup and Delivery Constraints (ONLY for subproblems with pairs)
+                        routing.SetFixedCostOfVehicle(0, 0) 
+
+                        required_dynamic_clusters = set(prepared_data.get('required_clusters', []))
+                        if required_dynamic_clusters:
+                            print(f"[DEBUG EnhancedVRP solve OR-Tools] Adding cluster coverage constraints for {len(required_dynamic_clusters)} NEW dynamic clusters.")
+                            # Build map: cluster_id -> list of node indices in the current subproblem
+                            cluster_to_node_indices = {}
+                            # Use the idx_to_cluster_set passed in prepared_data (mapped to subproblem indices)
+                            subproblem_idx_to_cluster = prepared_data.get('idx_to_cluster_set', {})
+                            for node_idx in range(num_locations): # Iterate through all subproblem nodes
+                                node_clusters = subproblem_idx_to_cluster.get(node_idx, set())
+                                for cluster_id in node_clusters:
+                                    if cluster_id not in cluster_to_node_indices:
+                                        cluster_to_node_indices[cluster_id] = []
+                                    cluster_to_node_indices[cluster_id].append(node_idx)
+
+                            for cluster_id in required_dynamic_clusters:
+                                cluster_checkpoint_indices = cluster_to_node_indices.get(cluster_id, [])
+                                if cluster_checkpoint_indices:
+                                    cluster_checkpoint_rm_indices = [manager.NodeToIndex(idx) for idx in cluster_checkpoint_indices]
+                                    penalty = 1000000 # High penalty for coverage
+                                    routing.AddDisjunction(cluster_checkpoint_rm_indices, penalty, 1)
+                                    print(f"  - Added coverage disjunction for NEW Cluster {cluster_id} (Nodes: {cluster_checkpoint_indices})")
+                                else:
+                                    print(f"[ERROR EnhancedVRP solve OR-Tools] Required NEW dynamic Cluster {cluster_id} has no associated checkpoints. Solution may be infeasible.")
+
+                        if mandatory_nodes:
+                            print(f"[DEBUG EnhancedVRP solve OR-Tools] Adding mandatory visit constraints for {len(mandatory_nodes)} original nodes.")
+                            high_penalty = 10000000 
+                            for node_idx in mandatory_nodes:
+                                if 0 <= node_idx < num_locations and node_idx != start_node and node_idx != end_node:
+                                    node_rm_index = manager.NodeToIndex(node_idx)
+                                    routing.AddDisjunction([node_rm_index], high_penalty, 1)
+                                    print(f"  - Added mandatory visit for Node {node_idx}")
+                                else:
+                                     print(f"[WARN EnhancedVRP solve OR-Tools] Invalid or non-intermediate mandatory node index ({node_idx}) skipped.")
+
                         if is_subproblem and pickup_delivery_pairs:
                             print(f"[DEBUG EnhancedVRP solve OR-Tools] Adding {len(pickup_delivery_pairs)} P/D constraints for subproblem.")
                             for pair_index, (pickup_idx, delivery_idx) in enumerate(pickup_delivery_pairs):
@@ -231,13 +255,14 @@ class EnhancedVehicleRoutingProblem:
                                 else:
                                     print(f"[WARN EnhancedVRP solve OR-Tools] Invalid P/D node indices ({pickup_idx}, {delivery_idx}) for num_locations={num_locations}. Skipping constraint.")
 
+
                         # Search Parameters
                         search_parameters = pywrapcp.DefaultRoutingSearchParameters()
                         search_parameters.first_solution_strategy = (
                             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
                         search_parameters.local_search_metaheuristic = (
                             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-                        search_parameters.time_limit.FromSeconds(30) # Time limit
+                        search_parameters.time_limit.FromSeconds(30) 
 
                         # Solve
                         print("[DEBUG EnhancedVRP solve OR-Tools] Starting solver...")
@@ -247,7 +272,7 @@ class EnhancedVehicleRoutingProblem:
                         # Process OR-Tools Solution
                         if solution:
                             print("[DEBUG EnhancedVRP solve OR-Tools] Solution found.")
-                            routes_checkpoint_indices = [] # Reset/initialize
+                            routes_checkpoint_indices = [] 
                             total_distance_meters = 0
                             num_vehicles_in_model = 1 if is_subproblem else current_num_vehicles
 
@@ -256,9 +281,7 @@ class EnhancedVehicleRoutingProblem:
                                 route_nodes = []
                                 while not routing.IsEnd(index):
                                     node_index = manager.IndexToNode(index)
-                                    # Add node to route *unless* it's the designated start or end node of the problem
                                     is_problem_start_node = (node_index == start_node)
-                                    # For full VRP, end node is also start node (0). For subproblem, it's different.
                                     is_problem_end_node = (node_index == end_node and is_subproblem) or \
                                                           (node_index == start_node and not is_subproblem and routing.IsEnd(solution.Value(routing.NextVar(index)))) # Check if it's the depot AND the last stop
 
@@ -267,23 +290,21 @@ class EnhancedVehicleRoutingProblem:
 
                                     previous_index = index
                                     index = solution.Value(routing.NextVar(index))
-                                    # Accumulate distance directly from solution objective if possible, or arc costs
-                                    # route_distance += routing.GetArcCostForVehicle(previous_index, index, vehicle_id) # Less reliable if objective is complex
-
-                                if route_nodes: # Only add routes that visit intermediate nodes
+              
+                                if route_nodes: 
                                     routes_checkpoint_indices.append(route_nodes)
                                     print(f"  - Vehicle {vehicle_id} Route Nodes: {route_nodes}")
                                 else:
                                      print(f"  - Vehicle {vehicle_id} Route is empty or only visits start/end.")
 
                             total_distance_meters = solution.ObjectiveValue()
-                            total_distance_calculated = total_distance_meters / 1000.0 # Convert to km
+                            total_distance_calculated = total_distance_meters / 1000.0 
                             print(f"  - OR-Tools Objective (Total Distance): {total_distance_calculated:.2f} km")
 
                             # Subproblem check
                             if is_subproblem and len(routes_checkpoint_indices) > 1:
                                  print(f"[WARN EnhancedVRP solve OR-Tools] Subproblem solve resulted in {len(routes_checkpoint_indices)} routes, expected 1. Check constraints/setup.")
-                                 # Decide how to handle this - maybe take the longest/first? For now, keep all.
+       
 
                         else:
                             print("[ERROR EnhancedVRP solve OR-Tools] No solution found.")
@@ -295,17 +316,18 @@ class EnhancedVehicleRoutingProblem:
                         traceback.print_exc()
                         solver_error = f"OR-Tools failed: {ortools_exc}"
 
-            # --- Heuristic Solver Path (Includes 2-Opt refinement if requested) ---
-            # This path is executed ONLY if algorithm is 'heuristic' or 'two_opt'
             elif algorithm == 'heuristic' or algorithm == 'two_opt':
-                effective_algorithm_used = 'heuristic' # Base algorithm
-                # --- Constraint Check for Dynamic Subproblems ---
+                effective_algorithm_used = 'heuristic'
+
+                if is_subproblem and mandatory_nodes:
+                    print("[CRITICAL WARN EnhancedVRP solve Heuristic] Heuristic/2-Opt running for subproblem with MANDATORY NODES. These constraints ARE NOT ENFORCED by the heuristic. Route may be logically invalid.")
+ 
                 if is_subproblem and pickup_delivery_pairs:
                     if not HAS_ORTOOLS:
-                        # If OR-Tools is NOT available, we cannot enforce constraints. Error out.
+ 
                         print("[ERROR EnhancedVRP solve] Heuristic/2-Opt requested for subproblem with P/D pairs, but OR-Tools is unavailable to enforce constraints.")
                         solver_error = "OR-Tools needed but unavailable to enforce P/D constraints for dynamic subproblems using Heuristic/2-Opt."
-                        # Return immediately as the result would be invalid
+
                         end_time = time.time()
                         return {
                             'warehouse': warehouse, 'destinations': self.destinations, 'routes': [],
@@ -313,25 +335,31 @@ class EnhancedVehicleRoutingProblem:
                             'error': solver_error, 'algorithm_used': f'{algorithm} (failed constraint check)'
                         }
                     else:
-                        # OR-Tools IS available, but user chose heuristic/2-opt. Proceed with warning.
+
                         print("[CRITICAL WARN EnhancedVRP solve Heuristic] Heuristic/2-Opt running for subproblem with P/D pairs. ORDER CONSTRAINTS ARE NOT ENFORCED. Route may be logically invalid.")
 
                 print(f"[DEBUG EnhancedVRP solve] Using heuristic algorithm (NN-based)...")
                 # Call the heuristic solver
-                routes_checkpoint_indices, total_distance_calculated = self._solve_checkpoint_vrp_heuristic(
+                routes_checkpoint_indices, heuristic_error = self._solve_checkpoint_vrp_heuristic(
                     num_locations, distance_matrix, required_clusters, node_indices_map, idx_to_cluster_set,
                     current_num_vehicles, start_node, end_node, is_subproblem
                 )
 
-                # Apply 2-Opt refinement if requested and heuristic succeeded
-                if algorithm == 'two_opt':
-                    effective_algorithm_used = 'heuristic+2opt' # Update final algorithm string
-                    print(f"[DEBUG EnhancedVRP solve] Applying 2-Opt refinement to heuristic routes...")
-                    if distance_matrix is None:
-                        print("[ERROR EnhancedVRP solve] Cannot run 2-Opt: Missing distance matrix.")
-                        # This shouldn't happen due to earlier checks, but good to be safe
-                        solver_error = "Missing distance matrix for 2-Opt."
-                    else:
+                # Check if heuristic returned an error
+                if heuristic_error:
+                    solver_error = heuristic_error 
+
+                    print(f"[ERROR EnhancedVRP solve] Heuristic solver failed: {solver_error}")
+                    # The main error handling block later will catch solver_error
+                elif routes_checkpoint_indices is None: # Handle case where it might return None without error msg
+                    solver_error = "Heuristic solver returned no routes."
+                    print(f"[ERROR EnhancedVRP solve] {solver_error}")
+                else:
+                    # Calculate distance only if heuristic succeeded
+                    total_distance_calculated = sum(self._calculate_checkpoint_route_distance(route, distance_matrix) for route in routes_checkpoint_indices)
+                    # Apply 2-Opt refinement if requested and heuristic succeeded
+                    if algorithm == 'two_opt' and not solver_error: # Check solver_error again
+                        print(f"[DEBUG EnhancedVRP solve] Applying 2-Opt refinement to heuristic routes...")
                         routes_checkpoint_indices, total_distance_calculated = self._improve_checkpoint_routes_with_two_opt(
                             routes_checkpoint_indices, distance_matrix, start_node, end_node
                         )
@@ -340,7 +368,6 @@ class EnhancedVehicleRoutingProblem:
                  print(f"[ERROR EnhancedVRP solve] Unknown algorithm specified: {algorithm}")
                  solver_error = f"Unknown algorithm: {algorithm}"
 
-            # --- Final Check for Solver Errors before Post-processing ---
             if solver_error:
                  print(f"[ERROR EnhancedVRP solve] Solver phase failed: {solver_error}")
                  end_time = time.time()
@@ -350,37 +377,33 @@ class EnhancedVehicleRoutingProblem:
                      'error': solver_error, 'algorithm_used': effective_algorithm_used + " (failed)"
                  }
 
-            # --- Log Raw Solver Output ---
             if effective_algorithm_used == 'or_tools' and not solver_error:
                 print(f"[DEBUG EnhancedVRP solve] OR-Tools raw routes (indices): {routes_checkpoint_indices}")
             elif effective_algorithm_used.startswith('heuristic'): # Covers 'heuristic' and 'heuristic+2opt'
                 print(f"[DEBUG EnhancedVRP solve] Heuristic raw routes (indices): {routes_checkpoint_indices}")
 
-            # --- Post-processing (Convert raw indices to structured route data) ---
             solution_routes = []
             final_total_distance = 0.0
             print(f"[DEBUG EnhancedVRP solve] Post-processing {len(routes_checkpoint_indices)} routes found by {effective_algorithm_used}...")
 
             for vehicle_id, route_indices in enumerate(routes_checkpoint_indices):
                 print(f"[DEBUG EnhancedVRP solve] Processing Vehicle {vehicle_id}, Raw Indices: {route_indices}")
-                route_path = [] # Full sequence including start/end for visualization/geometry
-                route_stops = [] # Primary stops (e.g., checkpoints) for display
+                route_path = [] 
+                route_stops = [] 
 
-                # Get the correct start location data using node_indices_map
                 start_loc_data = node_indices_map.get(start_node)
                 if start_loc_data:
                     route_path.append({
                         'lat': start_loc_data['lat'], 'lon': start_loc_data['lon'],
                         'type': start_loc_data.get('type', 'warehouse' if not is_subproblem else 'subproblem_start'),
                         'is_dynamic': start_loc_data.get('is_dynamic', False),
-                        'matrix_idx': start_node # Include matrix index
+                        'matrix_idx': start_node 
                     })
                 else:
                     print(f"[WARN EnhancedVRP solve] Could not find start node data (Index: {start_node}) for vehicle {vehicle_id}")
 
-                # Process intermediate indices (route_indices should NOT contain start/end from solver)
                 for node_matrix_index in route_indices:
-                    loc_data = node_indices_map.get(node_matrix_index) # Use the map
+                    loc_data = node_indices_map.get(node_matrix_index)
 
                     if loc_data:
                         loc_type = loc_data.get('type', 'unknown')
@@ -396,8 +419,6 @@ class EnhancedVehicleRoutingProblem:
                         }
                         route_path.append(path_point)
 
-                        # Add to 'stops' list if it's a primary stop type (e.g., checkpoint)
-                        # Adjust this condition based on what should be listed as a numbered stop
                         if loc_type == 'checkpoint':
                             route_stops.append({
                                 'lat': loc_data['lat'], 'lon': loc_data['lon'],
@@ -406,7 +427,6 @@ class EnhancedVehicleRoutingProblem:
                                 'is_dynamic': loc_data.get('is_dynamic', False),
                                 'matrix_idx': node_matrix_index
                             })
-                        # Optionally add dynamic P/D to stops list as well if needed for display
                         elif loc_type in ['pickup', 'dropoff'] and loc_data.get('is_dynamic', False):
                              route_stops.append({
                                 'lat': loc_data['lat'], 'lon': loc_data['lon'],
@@ -439,9 +459,9 @@ class EnhancedVehicleRoutingProblem:
 
                 solution_routes.append({
                     'vehicle_id': vehicle_id,
-                    'path': route_path,    # Full path for geometry/visualization
-                    'stops': route_stops,   # Primary stops for listing/markers
-                    'distance': route_dist # Use calculated distance for this route
+                    'path': route_path,    
+                    'stops': route_stops,   
+                    'distance': route_dist 
                 })
                 print(f"[DEBUG EnhancedVRP solve] Vehicle {vehicle_id} - Final route_path length: {len(route_path)}")
                 print(f"[DEBUG EnhancedVRP solve] Vehicle {vehicle_id} - Final route_stops length: {len(route_stops)}")
@@ -482,65 +502,95 @@ class EnhancedVehicleRoutingProblem:
                 'error': f"Unexpected error: {e}", 'algorithm_used': effective_algorithm_used + " (exception)"
             }
 
-    def _solve_checkpoint_vrp_heuristic(self, num_locations, distance_matrix, required_clusters, checkpoint_indices, idx_to_cluster_set, num_vehicles, start_node=0, end_node=0, is_subproblem=False):
+    def _solve_checkpoint_vrp_heuristic(self, num_locations, distance_matrix, required_clusters, node_indices_map, idx_to_cluster_set, num_vehicles, start_node=0, end_node=0, is_subproblem=False):
         """
         Multi-vehicle Nearest Neighbor heuristic for checkpoint VRP.
         Adapts for single-vehicle subproblems with specified start/end nodes.
 
-        Args:
-            num_locations (int): Total number of nodes in the matrix (including start/end).
-            distance_matrix (np.ndarray): The distance matrix to use.
-            required_clusters (set): Clusters to cover (used only for full VRP).
-            checkpoint_indices (dict): Map matrix index -> checkpoint data (used only for full VRP).
-            idx_to_cluster_set (dict): Map matrix index -> set of clusters covered (used only for full VRP).
-            num_vehicles (int): Number of vehicles (should be 1 for subproblem).
-            start_node (int): The starting node index for the route(s). Defaults to 0.
-            end_node (int): The ending node index for the route(s). Defaults to 0.
-            is_subproblem (bool): Flag indicating if this is a single-route subproblem.
-
         Returns:
-            tuple: (list_of_routes, total_distance)
+            tuple: (list_of_routes, error_message)
                    For subproblems, list_of_routes contains a single route (list of intermediate node indices).
         """
         if is_subproblem:
-            print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Starting heuristic for subproblem. Start={start_node}, End={end_node}")
+            # --- REVISED SUBPROBLEM HEURISTIC (Cluster Covering NN) ---
+            print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Starting REVISED heuristic. Start={start_node}, End={end_node}, Clusters={required_clusters}")
             if num_vehicles != 1:
-                print(f"[WARN EnhancedVRP Heuristic Subproblem] Expected 1 vehicle for subproblem, got {num_vehicles}. Using 1.")
-                num_vehicles = 1
+                print(f"[WARN EnhancedVRP Heuristic Subproblem] Expected 1 vehicle, got {num_vehicles}. Using 1.")
+            num_vehicles = 1 # Force single vehicle for subproblem
 
-            intermediate_nodes = set(range(num_locations)) - {start_node, end_node}
-            if not intermediate_nodes:
-                print("[DEBUG EnhancedVRP Heuristic Subproblem] No intermediate nodes to visit.")
+            # Checkpoints relevant to this subproblem are all nodes except start/end
+            subproblem_checkpoint_indices = set(range(num_locations)) - {start_node, end_node}
+
+            if not subproblem_checkpoint_indices:
+                print("[DEBUG EnhancedVRP Heuristic Subproblem] No intermediate checkpoints. Direct route.")
                 dist = distance_matrix[start_node][end_node] if 0 <= start_node < num_locations and 0 <= end_node < num_locations else 0
-                return [[]], dist
+                return [[]], None # Return empty list of intermediate stops
 
             route_indices = []
             current_loc_idx = start_node
             total_distance = 0.0
-            unvisited_intermediate = set(intermediate_nodes)
+            unvisited_checkpoints = set(subproblem_checkpoint_indices)
+            # Use the required_clusters passed specifically for the subproblem
+            clusters_to_cover = set(required_clusters) # Make a copy
 
-            while unvisited_intermediate:
-                nearest_node = min(unvisited_intermediate, key=lambda node: distance_matrix[current_loc_idx][node])
+            print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Initial state: Unvisited CPs: {len(unvisited_checkpoints)}, Clusters to Cover: {len(clusters_to_cover)}")
 
-                dist_to_nearest = distance_matrix[current_loc_idx][nearest_node]
-                total_distance += dist_to_nearest
-                route_indices.append(nearest_node)
-                current_loc_idx = nearest_node
-                unvisited_intermediate.remove(nearest_node)
-                print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Visiting node {nearest_node} (Dist: {dist_to_nearest:.2f})")
+            while clusters_to_cover and unvisited_checkpoints:
+                best_cp_idx = -1
+                min_dist = float('inf')
 
+                # Find the nearest checkpoint that covers at least one needed cluster
+                relevant_checkpoints = {
+                    cp_idx for cp_idx in unvisited_checkpoints
+                    if idx_to_cluster_set.get(cp_idx, set()).intersection(clusters_to_cover)
+                }
+
+                candidates = relevant_checkpoints if relevant_checkpoints else unvisited_checkpoints
+
+                if not candidates:
+                    print("[ERROR EnhancedVRP Heuristic Subproblem] No candidates found, but clusters/checkpoints remain.")
+                    break # Should not happen if unvisited_checkpoints is not empty
+
+                current_loc_idx = route_indices[-1] if route_indices else start_node # Ensure current_loc_idx is updated
+
+                for cp_idx in candidates:
+                    dist = distance_matrix[current_loc_idx][cp_idx]
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_cp_idx = cp_idx
+
+                if best_cp_idx != -1:
+                    total_distance += min_dist
+                    route_indices.append(best_cp_idx)
+                    current_loc_idx = best_cp_idx
+                    covered_by_cp = idx_to_cluster_set.get(best_cp_idx, set())
+                    clusters_to_cover.difference_update(covered_by_cp)
+                    unvisited_checkpoints.remove(best_cp_idx)
+                    print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Visiting CP {best_cp_idx} (Dist: {min_dist:.2f}). Covered: {covered_by_cp}. Remaining clusters: {len(clusters_to_cover)}")
+                else:
+                    # Should not happen if candidates was not empty
+                    print("[ERROR EnhancedVRP Heuristic Subproblem] Could not find next best checkpoint.")
+                    break
+
+            if clusters_to_cover:
+                 print(f"[ERROR EnhancedVRP Heuristic Subproblem] Heuristic finished but failed to cover clusters: {clusters_to_cover}")
+                 # Return an error structure instead of partial route
+                 return None, f"Heuristic failed to cover required subproblem clusters: {clusters_to_cover}"
+
+            # Add distance back to the designated end node
             dist_to_end = distance_matrix[current_loc_idx][end_node]
             total_distance += dist_to_end
             print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Returning to end node {end_node} (Dist: {dist_to_end:.2f})")
 
             print(f"[DEBUG EnhancedVRP Heuristic Subproblem] Finished. Route: {route_indices}, Total Distance: {total_distance:.2f}")
-            return [route_indices], total_distance
+            # Return list containing the single route's intermediate indices AND None for error message
+            return [route_indices], None
 
         else:
             print(f"[DEBUG EnhancedVRP Heuristic Full] Starting heuristic calculation for {num_vehicles} vehicles...")
             all_routes_indices = []
             total_distance = 0
-            unvisited_checkpoints = set(checkpoint_indices.keys())
+            unvisited_checkpoints = set(node_indices_map.keys())
             clusters_to_cover = set(required_clusters)
             vehicle_routes = [[] for _ in range(num_vehicles)]
             vehicle_distances = [0.0] * num_vehicles
@@ -582,7 +632,7 @@ class EnhancedVehicleRoutingProblem:
                     total_distance += vehicle_distances[v_idx]
 
             print(f"[DEBUG EnhancedVRP Heuristic Full] Finished. Found {len(all_routes_indices)} routes. Total distance: {total_distance:.2f}")
-            return all_routes_indices, total_distance
+            return all_routes_indices, None
 
     def _improve_checkpoint_routes_with_two_opt(self, routes_indices, distance_matrix, start_node=0, end_node=0):
         """

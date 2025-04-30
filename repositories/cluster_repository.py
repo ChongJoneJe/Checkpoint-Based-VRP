@@ -23,7 +23,6 @@ class ClusterRepository:
     @staticmethod
     def add_location_to_cluster(location_id, cluster_id):
         """Add a location to a cluster"""
-        # Check if already assigned
         existing = execute_read(
             "SELECT 1 FROM location_clusters WHERE location_id = ?",
             (location_id,),
@@ -31,13 +30,11 @@ class ClusterRepository:
         )
         
         if existing:
-            # Update existing assignment
             return execute_write(
                 "UPDATE location_clusters SET cluster_id = ? WHERE location_id = ?",
                 (cluster_id, location_id)
             )
         else:
-            # Create new assignment
             return execute_write(
                 "INSERT INTO location_clusters (location_id, cluster_id) VALUES (?, ?)",
                 (location_id, cluster_id)

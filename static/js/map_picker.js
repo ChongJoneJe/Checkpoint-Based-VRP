@@ -1,26 +1,19 @@
-// Map and location management for the VRP application
-
 let map;
-let locationMode = 'destination';  // Default mode
+let locationMode = 'destination'; 
 let warehouse = null;
 let destinations = [];
 let warehouseMarker = null;
 let destinationMarkers = [];
 
-/**
- * Initialize the map with given center coordinates
- */
+
 function initMap(lat, lng) {
-    // Use the centralized map creation function
     map = Utils.createMap('map', [lat, lng], 13);
     if (!map) return;
     
-    // Setup event listeners for buttons (keep this specific to map_picker)
     document.getElementById('warehouse-btn').addEventListener('click', () => setLocationMode('warehouse'));
     document.getElementById('destination-btn').addEventListener('click', () => setLocationMode('destination'));
     document.getElementById('clear-btn').addEventListener('click', clearSelections);
     document.getElementById('save-btn').addEventListener('click', function() {
-        // Validate locations first
         if (!warehouseMarker) {
             Utils.showNotification('Please select a warehouse location first', 'error');
             return;
@@ -31,29 +24,21 @@ function initMap(lat, lng) {
             return;
         }
         
-        // Prompt for name
         showNamePrompt();
     });
     
-    // Add click handler to the map
     map.on('click', handleMapClick);
     
-    // Add preset management event listeners
     document.getElementById('save-preset-btn').addEventListener('click', savePreset);
     document.getElementById('apply-preset-btn').addEventListener('click', applySelectedPreset);
     document.getElementById('delete-preset-btn').addEventListener('click', deleteSelectedPreset);
     
-    // Load available presets
     loadPresets();
 }
 
-/**
- * Set the location selection mode (warehouse or destination)
- */
 function setLocationMode(mode) {
     locationMode = mode;
     
-    // Update button styling to show active mode
     document.getElementById('warehouse-btn').classList.toggle('active', mode === 'warehouse');
     document.getElementById('destination-btn').classList.toggle('active', mode === 'destination');
     
@@ -61,9 +46,6 @@ function setLocationMode(mode) {
     document.getElementById('map').style.cursor = 'crosshair';
 }
 
-/**
- * Handle clicks on the map
- */
 function handleMapClick(e) {
     const lat = e.latlng.lat;
     const lng = e.latlng.lng;
@@ -75,9 +57,7 @@ function handleMapClick(e) {
     }
 }
 
-/**
- * Verify location address
- */
+
 function verifyLocation(lat, lng, locationType) {
     Utils.showNotification('Verifying location...', 'info');
     
@@ -88,26 +68,20 @@ function verifyLocation(lat, lng, locationType) {
                 // Show the address modal when reverse geocoding failed
                 return showAddressModal(lat, lng, locationType, data.suggested_values);
             } else {
-                // No need for user input, return the address
                 return Promise.resolve(data.address);
             }
         })
         .catch(error => {
             console.error('Error verifying location:', error);
             Utils.showNotification('Error verifying location address', 'error');
-            // Show address form even in case of error
             return showAddressModal(lat, lng, locationType, {});
         });
 }
 
-/**
- * Show the address modal and return a Promise
- */
 function showAddressModal(lat, lng, locationType, suggestedValues) {
     return new Promise((resolve, reject) => {
         const modal = document.getElementById('address-modal');
         
-        // Set hidden values
         document.getElementById('address-lat').value = lat;
         document.getElementById('address-lng').value = lng;
         document.getElementById('address-type').value = locationType;
@@ -119,33 +93,25 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             if (suggestedValues.postcode) document.getElementById('address-postcode').value = suggestedValues.postcode;
         }
         
-        // Show the modal
         modal.style.display = 'block';
         
-        // Create a mini map showing the selected location
         const previewMap = L.map('mini-map').setView([lat, lng], 17);
         
-        // Add base tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap contributors'
         }).addTo(previewMap);
         
-        // Add marker for the selected location
         L.marker([lat, lng]).addTo(previewMap);
         
-        // Fix the map after rendering (needed because the map is initially hidden)
         setTimeout(() => {
             previewMap.invalidateSize();
         }, 100);
         
-        // Focus the street input
         document.getElementById('address-street').focus();
         
-        // Handle form submission
         document.getElementById('address-form').onsubmit = function(e) {
             e.preventDefault();
             
-            // Get form values - just use the street as entered (no section/subsection formatting)
             let street = document.getElementById('address-street').value.trim();
             let neighborhood = document.getElementById('address-neighborhood').value.trim();
             let city = document.getElementById('address-city').value.trim();
@@ -161,13 +127,11 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                 country: 'Malaysia'
             };
             
-            // If warehouse exists, add it to the data for proper clustering
             if (warehouseMarker) {
                 const warehouseLatLng = warehouseMarker.getLatLng();
                 addressData.warehouse_location = [warehouseLatLng.lat, warehouseLatLng.lng];
             }
             
-            // Close the modal
             modal.style.display = 'none';
             
             // Submit to server
@@ -183,7 +147,6 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                 if (data.status === 'success') {
                     Utils.showNotification(`Address saved successfully${data.cluster_name ? ` to cluster: ${data.cluster_name}` : ''}`, 'success');
                     
-                    // Create a complete address object to resolve the promise
                     const addressObject = {
                         street: street,
                         neighborhood: neighborhood,
@@ -192,11 +155,9 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
                         country: 'Malaysia'
                     };
                     
-                    // Cleanup
                     previewMap.remove();
                     resetAddressForm();
-                    
-                    // Resolve with the full address object
+
                     resolve(addressObject);
                 } else {
                     Utils.showNotification('Error: ' + data.message, 'error');
@@ -214,7 +175,6 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             });
         };
         
-        // Handle cancel button
         document.getElementById('cancel-address-btn').onclick = function() {
             modal.style.display = 'none';
             resetAddressForm();
@@ -222,7 +182,6 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
             reject(new Error('Address input canceled'));
         };
         
-        // Handle modal close button
         document.querySelector('.close-modal').onclick = function() {
             modal.style.display = 'none';
             resetAddressForm();
@@ -232,21 +191,13 @@ function showAddressModal(lat, lng, locationType, suggestedValues) {
     });
 }
 
-/**
- * Reset the address form
- */
 function resetAddressForm() {
     document.getElementById('address-form').reset();
 }
 
-/**
- * Set the warehouse location
- */
 function setWarehouse(lat, lng) {
-    // Verify location first
     verifyLocation(lat, lng, 'warehouse')
         .then(address => {
-            // Remove existing warehouse marker if any
             if (warehouseMarker) {
                 map.removeLayer(warehouseMarker);
             }
@@ -267,18 +218,15 @@ function setWarehouse(lat, lng) {
                 })
             }).addTo(map);
             
-            // Add popup with coordinates and address
             const addressText = address.street ? `<br>${address.street}` : '';
             warehouseMarker.bindPopup(`Warehouse<br>${lat.toFixed(6)}, ${lng.toFixed(6)}${addressText}`);
             
-            // Update sidebar display
             document.getElementById('warehouse-display').innerHTML = `
                 <h3>Warehouse</h3>
                 <p class="coords">${lat.toFixed(6)}, ${lng.toFixed(6)}</p>
                 ${address.street ? `<p class="address">${address.street}</p>` : ''}
             `;
             
-            // Switch to destination mode after setting warehouse
             setLocationMode('destination');
             
             Utils.showNotification('Warehouse location set!');
@@ -289,20 +237,15 @@ function setWarehouse(lat, lng) {
         });
 }
 
-/**
- * Add a destination location
- */
+
 function addDestination(lat, lng) {
-    // Verify location first
     verifyLocation(lat, lng, 'destination')
         .then(address => {
             const index = destinations.length;
             destinations.push([lat, lng]);
             
-            // Save destination location to session storage
             saveLocation(lat, lng);
             
-            // Create marker for this destination
             const marker = L.marker([lat, lng], {
                 icon: L.divIcon({
                     className: 'destination-marker',
@@ -322,15 +265,13 @@ function addDestination(lat, lng) {
             // Add popup with information and address
             const addressText = address.street ? `<br>${address.street}` : '';
             marker.bindPopup(`Destination ${index + 1}<br>${lat.toFixed(6)}, ${lng.toFixed(6)}${addressText}`);
-            
-            // Add right-click handler for quick removal
+
             marker.on('contextmenu', function() {
                 removeDestinationByMarker(marker);
             });
             
             destinationMarkers.push(marker);
             
-            // Update destination list in sidebar
             updateDestinationsList();
             
             Utils.showNotification('Destination added!');
@@ -341,20 +282,14 @@ function addDestination(lat, lng) {
         });
 }
 
-/**
- * Remove a destination by marker reference
- */
+
 function removeDestinationByMarker(marker) {
-    // Find index of marker
     const index = destinationMarkers.findIndex(m => m === marker);
     if (index !== -1) {
         removeDestination(index);
     }
 }
 
-/**
- * Update the list of destinations in the sidebar
- */
 function updateDestinationsList() {
     const listElement = document.getElementById('destinations-list');
     const countBadge = document.getElementById('count-badge');
@@ -382,18 +317,12 @@ function updateDestinationsList() {
     listElement.innerHTML = html;
 }
 
-/**
- * Remove a destination by index
- */
 function removeDestination(index) {
-    // Remove marker from map
     map.removeLayer(destinationMarkers[index]);
     
-    // Remove from arrays
     destinations.splice(index, 1);
     destinationMarkers.splice(index, 1);
     
-    // Redraw all destination markers (to update numbers)
     destinationMarkers.forEach(marker => map.removeLayer(marker));
     destinationMarkers = [];
     
@@ -411,31 +340,24 @@ function removeDestination(index) {
         marker.bindPopup(`Destination ${i + 1}<br>${lat.toFixed(6)}, ${lng.toFixed(6)}`);
         destinationMarkers.push(marker);
     }
-    
-    // Update sidebar list
+
     updateDestinationsList();
     
     Utils.showNotification('Destination removed');
 }
 
-/**
- * Clear all selections (warehouse and destinations)
- */
 function clearSelections() {
     if (confirm('Are you sure you want to clear all locations?')) {
-        // Remove warehouse marker
         if (warehouseMarker) {
             map.removeLayer(warehouseMarker);
             warehouseMarker = null;
             warehouse = null;
         }
         
-        // Remove all destination markers
         destinationMarkers.forEach(marker => map.removeLayer(marker));
         destinationMarkers = [];
         destinations = [];
         
-        // Reset displays
         document.getElementById('warehouse-display').innerHTML = '';
         updateDestinationsList();
         
@@ -443,31 +365,21 @@ function clearSelections() {
     }
 }
 
-/**
- * Clear selections without confirmation dialog
- * Used when loading presets
- */
 function clearSelectionsWithoutConfirm() {
-    // Remove warehouse marker
     if (warehouseMarker) {
         map.removeLayer(warehouseMarker);
         warehouseMarker = null;
         warehouse = null;
     }
     
-    // Remove all destination markers
     destinationMarkers.forEach(marker => map.removeLayer(marker));
     destinationMarkers = [];
     destinations = [];
     
-    // Reset displays
     document.getElementById('warehouse-display').innerHTML = '';
     updateDestinationsList();
 }
 
-/**
- * Save the current locations to the server
- */
 function saveLocations(presetName) {
     // Prepare data
     const data = {
@@ -476,10 +388,8 @@ function saveLocations(presetName) {
         destinations: destinationMarkers.map(marker => [marker.getLatLng().lat, marker.getLatLng().lng])
     };
     
-    // Show saving notification
     Utils.showNotification('Saving locations...');
     
-    // Send to backend
     fetch('/locations/save_locations', {
         method: 'POST',
         headers: {
@@ -501,20 +411,15 @@ function saveLocations(presetName) {
     });
 }
 
-/**
- * Load saved locations from server
- */
 function loadSavedLocations() {
     fetch('/locations/get_locations')
         .then(response => response.json())
         .then(data => {
-            // If we have a warehouse location
             if (data.warehouse) {
                 const [lat, lng] = data.warehouse;
                 setWarehouse(lat, lng);
             }
             
-            // If we have destinations
             if (data.destinations && data.destinations.length > 0) {
                 data.destinations.forEach(coords => {
                     const [lat, lng] = coords;
@@ -527,9 +432,6 @@ function loadSavedLocations() {
         });
 }
 
-/**
- * Load available presets from the server
- */
 function loadPresets() {
     fetch('/presets/get_presets')
         .then(response => response.json())
@@ -556,9 +458,6 @@ function loadPresets() {
         });
 }
 
-/**
- * Save current locations as a new preset
- */
 function savePreset() {
     if (!warehouse) {
         Utils.showNotification('Please set a warehouse location first', 'error');
@@ -597,7 +496,7 @@ function savePreset() {
         if (data.status === 'success') {
             Utils.showNotification(`Preset "${presetName}" saved successfully!`, 'success');
             presetNameInput.value = '';
-            loadPresets();  // Refresh the presets list
+            loadPresets();  
         } else {
             Utils.showNotification('Error: ' + data.message, 'error');
         }
@@ -608,9 +507,6 @@ function savePreset() {
     });
 }
 
-/**
- * Apply the selected preset
- */
 function applySelectedPreset() {
     const presetsList = document.getElementById('presets-list');
     const selectedOption = presetsList.options[presetsList.selectedIndex];
@@ -626,16 +522,13 @@ function applySelectedPreset() {
         .then(response => response.json())
         .then(data => {
             if (data.status === 'success') {
-                // Clear current selections
                 clearSelectionsWithoutConfirm();
                 
-                // Set warehouse
                 if (data.preset.warehouse) {
                     const [lat, lng] = data.preset.warehouse;
                     setWarehouse(lat, lng);
                 }
                 
-                // Add destinations
                 if (data.preset.destinations && data.preset.destinations.length > 0) {
                     data.preset.destinations.forEach(coords => {
                         const [lat, lng] = coords;
@@ -654,9 +547,6 @@ function applySelectedPreset() {
         });
 }
 
-/**
- * Delete the selected preset
- */
 function deleteSelectedPreset() {
     const presetsList = document.getElementById('presets-list');
     const selectedOption = presetsList.options[presetsList.selectedIndex];
@@ -677,7 +567,7 @@ function deleteSelectedPreset() {
         .then(data => {
             if (data.status === 'success') {
                 Utils.showNotification(`Preset "${presetName}" deleted successfully`, 'success');
-                loadPresets();  // Refresh the presets list
+                loadPresets();  
             } else {
                 Utils.showNotification('Error: ' + data.message, 'error');
             }
@@ -689,9 +579,6 @@ function deleteSelectedPreset() {
     }
 }
 
-/**
- * Show notification message
- */
 function showNotification(message, type = 'info') {
     Utils.showNotification(message, type);
 }
@@ -706,10 +593,8 @@ function showNamePrompt() {
     nameContainer.classList.remove('hidden');
     notification.classList.remove('hidden');
     
-    // Focus the input
     document.getElementById('preset-name-prompt').focus();
     
-    // Set up button handlers if they don't exist yet
     if (!document.getElementById('confirm-name-btn').hasClickHandler) {
         document.getElementById('confirm-name-btn').addEventListener('click', confirmSaveWithName);
         document.getElementById('confirm-name-btn').hasClickHandler = true;
@@ -720,7 +605,6 @@ function showNamePrompt() {
         document.getElementById('cancel-name-btn').hasClickHandler = true;
     }
     
-    // Also allow Enter key to confirm
     document.getElementById('preset-name-prompt').addEventListener('keyup', function(event) {
         if (event.key === 'Enter') {
             confirmSaveWithName();
@@ -732,15 +616,12 @@ function confirmSaveWithName() {
     const name = document.getElementById('preset-name-prompt').value.trim();
     
     if (!name) {
-        // Highlight the input if empty
         document.getElementById('preset-name-prompt').style.borderColor = 'red';
         return;
     }
     
-    // Hide the name prompt
     hideNamePrompt();
     
-    // Proceed with saving
     saveLocations(name);
 }
 
@@ -761,9 +642,6 @@ function hideNotification() {
     Utils.hideNotification();
 }
 
-/**
- * Prompt user for preset name and save locations
- */
 function promptSaveLocations() {
     if (!warehouseMarker) {
         Utils.showNotification('Please select a warehouse location first', 'error');
@@ -775,7 +653,6 @@ function promptSaveLocations() {
         return;
     }
     
-    // Prompt for name with a simple dialog
     const presetName = prompt('Please enter a name for this preset:');
     
     if (!presetName || presetName.trim() === '') {
@@ -789,10 +666,8 @@ function promptSaveLocations() {
         destinations: destinationMarkers.map(marker => [marker.getLatLng().lat, marker.getLatLng().lng])
     };
     
-    // Show loading indicator
     showLoadingIndicator(destinationMarkers.length);
     
-    // Send to backend
     fetch('/locations/save_locations', {
         method: 'POST',
         headers: {
@@ -802,12 +677,12 @@ function promptSaveLocations() {
     })
     .then(response => response.json())
     .then(data => {
-        // Hide loading indicator
+
         hideLoadingIndicator();
         
         if (data.status === 'success') {
             Utils.showNotification('Locations saved successfully!', 'success');
-            // Reload presets if you have a presets list
+
             if (typeof loadPresets === 'function') {
                 loadPresets();
             }
@@ -816,7 +691,7 @@ function promptSaveLocations() {
         }
     })
     .catch(error => {
-        // Hide loading indicator on error
+
         hideLoadingIndicator();
         
         console.error('Error:', error);
@@ -824,23 +699,14 @@ function promptSaveLocations() {
     });
 }
 
-/**
- * Show loading indicator with progress
- */
 function showLoadingIndicator(totalLocations) {
     return Utils.showLoadingIndicator('Saving Locations', true);
 }
 
-/**
- * Hide loading indicator
- */
 function hideLoadingIndicator() {
     Utils.hideLoadingIndicator();
 }
 
-/**
- * Save location to session storage
- */
 function saveLocation(lat, lon, isWarehouse = false) {
     if (isWarehouse) {
         sessionStorage.setItem('warehouseLocation', JSON.stringify({lat, lon}));
@@ -851,9 +717,8 @@ function saveLocation(lat, lon, isWarehouse = false) {
     }
 }
 
-// Clean up the event listeners at the bottom of your file
 document.addEventListener('DOMContentLoaded', function() {
-    // Clear any stored location data
+
     sessionStorage.removeItem('selectedLocations');
     sessionStorage.removeItem('warehouseLocation');
     localStorage.removeItem('selectedLocations');
@@ -867,25 +732,21 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     markers = [];
     
-    // Reset counters and displays
     document.getElementById('count-badge').textContent = '0';
     document.getElementById('destinations-list').innerHTML = '';
     document.getElementById('warehouse-display').innerHTML = '';
     
-    // Reset buttons to initial state
     document.getElementById('warehouse-btn').classList.remove('active');
     document.getElementById('destination-btn').classList.add('active');
     
-    // Load any stored locations
     const storedLocations = JSON.parse(sessionStorage.getItem('selectedLocations') || '[]');
     const warehouseLocation = JSON.parse(sessionStorage.getItem('warehouseLocation') || 'null');
     
-    // Initialize map with default center if not provided
+
     if (typeof initMap === 'function' && typeof lat === 'undefined') {
-        initMap(3.1390, 101.6869); // Default to Malaysia
+        initMap(3.1390, 101.6869); 
     }
     
-    // Set up button event listeners
     document.getElementById('warehouse-btn').addEventListener('click', function() {
         setLocationMode('warehouse');
     });
@@ -896,7 +757,6 @@ document.addEventListener('DOMContentLoaded', function() {
     
     document.getElementById('clear-btn').addEventListener('click', clearSelections);
     
-    // Set up the save button with direct prompt
     document.getElementById('save-btn').addEventListener('click', promptSaveLocations);
 
 });

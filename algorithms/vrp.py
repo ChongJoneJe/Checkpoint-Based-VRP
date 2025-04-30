@@ -8,7 +8,6 @@ from config import DEFAULT_VEHICLE
 import time
 from algorithms.tsp import TravellingSalesmanProblem
 
-# ADD: Import OR-Tools if available
 try:
     from ortools.constraint_solver import routing_enums_pb2
     from ortools.constraint_solver import pywrapcp
@@ -16,7 +15,6 @@ try:
 except ImportError:
     HAS_ORTOOLS = False
     print("WARNING: Google OR-Tools not installed. OR-Tools algorithm will not be available for static VRP.")
-    # Define dummy classes/enums if OR-Tools is not installed to avoid NameErrors later
     class routing_enums_pb2:
         class FirstSolutionStrategy:
             PATH_CHEAPEST_ARC = None
@@ -116,9 +114,8 @@ class VehicleRoutingProblem:
         """
         Calculate the Haversine distance between two points in kilometers
         """
-        R = 6371  # Earth radius in km
-        
-        # Convert to radians
+        R = 6371  
+
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
         
         # Haversine formula

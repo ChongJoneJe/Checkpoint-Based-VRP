@@ -12,7 +12,6 @@ class CacheService:
     _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
-        # Implement Singleton pattern to ensure one cache instance
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(CacheService, cls).__new__(cls)
@@ -31,11 +30,9 @@ class CacheService:
                     # Item expired, remove it
                     del self._cache[key]
                     del self._expirations[key]
-                    return None # Indicate cache miss (expired)
+                    return None 
                 else:
                     print(f"[DEBUG CacheService] Cache hit for key: {key}")
-                    # Return a copy to prevent external modification of cached object?
-                    # For numpy arrays, maybe return self._cache[key].copy() if needed
                     return self._cache[key] # Return cached item
             else:
                 print(f"[DEBUG CacheService] Cache miss for key: {key}")
@@ -43,8 +40,7 @@ class CacheService:
 
     def set(self, key, value, timeout=None):
         """Add an item to the cache with an optional timeout (in seconds)."""
-        with self._lock: # Ensure thread safety
-            # Consider adding size limits if memory usage is a concern
+        with self._lock: 
             self._cache[key] = value
             if timeout:
                 self._expirations[key] = time.time() + timeout

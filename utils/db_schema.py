@@ -1,6 +1,3 @@
-"""
-Database schema definitions for the application
-"""
 
 SCHEMA_SQL = """
 -- Locations table

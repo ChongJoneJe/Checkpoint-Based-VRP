@@ -24,8 +24,7 @@ class LocationService:
         
         if not preset:
             return {"warehouse": None, "destinations": []}
-        
-        # Get warehouse using the correct schema (preset_locations with is_warehouse flag)
+
         warehouse_query = """
             SELECT l.lat, l.lon 
             FROM locations l
@@ -52,7 +51,6 @@ class LocationService:
     def save_locations(name, warehouse, destinations):
         """Save warehouse and destinations with geocoding, then cluster them"""
         try:
-            # Generate a UUID for the preset ID (since it's TEXT in schema, not INTEGER)
             preset_id = str(uuid.uuid4())
             
             # Create the preset first
@@ -65,8 +63,7 @@ class LocationService:
             
             # Use the global geocoder instance
             geocoder = current_app.config['geocoder']
-            
-            # Save warehouse location but DON'T cluster it
+
             wh_lat, wh_lon = warehouse
             wh_address = geocoder.geocode_location(wh_lat, wh_lon)
             
@@ -128,25 +125,22 @@ class LocationService:
                 "INSERT INTO preset_locations (preset_id, location_id, is_warehouse) VALUES (?, ?, 1)",
                 (preset_id, wh_loc_id)
             )
-            
-            # Also add to warehouses table for backwards compatibility
+           
             execute_write(
                 "INSERT INTO warehouses (preset_id, location_id) VALUES (?, ?)",
                 (preset_id, wh_loc_id)
             )
             
             print(f"DEBUG: Added warehouse at location {wh_loc_id} to preset {preset_id}")
-            
-            # Now process destinations with clustering
+          
             for dest in destinations:
                 dest_lat, dest_lon = dest
                 
-                # Don't cluster if it's the same as warehouse
+    
                 if abs(dest_lat - wh_lat) < 0.0001 and abs(dest_lon - wh_lon) < 0.0001:
                     print(f"DEBUG: Destination {dest_lat}, {dest_lon} is same as warehouse - skipping")
                     continue
                     
-                # Use the smart clustering which geocodes and clusters in one step
                 result = geocoder.add_location_with_smart_clustering(dest_lat, dest_lon, wh_lat, wh_lon)
                 
                 if result and isinstance(result, tuple) and len(result) >= 2:

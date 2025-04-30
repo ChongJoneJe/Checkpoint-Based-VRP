@@ -22,11 +22,9 @@ class VRPTestingService:
         for filename in os.listdir(snapshot_dir):
             if filename.endswith('.sqlite'):
                 file_path = os.path.join(snapshot_dir, filename)
-                
-                # Get file creation time
+  
                 created_at = datetime.fromtimestamp(os.path.getctime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
-                
-                # Get stats from the snapshot
+             
                 stats = VRPTestingService.get_snapshot_stats(file_path)
                 
                 snapshots.append({
@@ -36,7 +34,6 @@ class VRPTestingService:
                     'stats': stats
                 })
         
-        # Sort snapshots by creation time (newest first)
         return sorted(snapshots, key=lambda x: x['created_at'], reverse=True)
     
     @staticmethod
@@ -66,7 +63,6 @@ class VRPTestingService:
     @staticmethod
     def delete_snapshot(snapshot_id):
         """Delete a database snapshot"""
-        # Validate snapshot ID (prevent directory traversal)
         if '..' in snapshot_id or '/' in snapshot_id or '\\' in snapshot_id:
             return False, "Invalid snapshot ID"
         
@@ -130,7 +126,6 @@ class VRPTestingService:
     def get_presets_from_snapshot(snapshot_path):
         """Get all presets from a snapshot database"""
         try:
-            # Connect to the snapshot database
             conn = sqlite3.connect(snapshot_path)
             conn.row_factory = sqlite3.Row
             
@@ -200,7 +195,6 @@ class VRPTestingService:
     def save_test_result(result):
         """Save a test result to the database"""
         try:
-            # Create results database if it doesn't exist
             db_path = os.path.join(current_app.root_path, 'static', 'data', 'vrp_tests.db')
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -284,25 +278,21 @@ class VRPTestingService:
             for row in tests_raw:
                 test_dict = dict(row)
                 try:
-                    # Attempt to parse result_data to get test_info if columns are missing
+
                     result_data = json.loads(test_dict.get('result_data', '{}'))
                     test_info = result_data.get('test_info', {})
-
-                    # Populate top-level fields from test_info if they are null/missing in the main row
-                    # (Handles older data before schema change and ensures consistency)
                     test_dict['algorithm'] = test_dict.get('algorithm') or test_info.get('algorithm')
                     test_dict['num_vehicles'] = test_dict.get('num_vehicles') or test_info.get('num_vehicles')
                     test_dict['test_type'] = test_dict.get('test_type') or test_info.get('test_type')
-                    test_dict['total_distance'] = test_dict.get('total_distance') # Keep main value if exists
-                    test_dict['computation_time'] = test_dict.get('computation_time') # Keep main value if exists
+                    test_dict['total_distance'] = test_dict.get('total_distance')
+                    test_dict['computation_time'] = test_dict.get('computation_time') 
 
                     # Ensure test_info itself is included for the frontend
                     test_dict['test_info'] = test_info
-                    # Remove raw result_data to avoid sending large JSON unless needed
-                    # test_dict.pop('result_data', None)
+
 
                 except json.JSONDecodeError:
-                    test_dict['test_info'] = {} # Add empty dict if parsing fails
+                    test_dict['test_info'] = {}
                 except Exception as parse_error:
                      print(f"Error processing test history row {test_dict.get('id')}: {parse_error}")
                      test_dict['test_info'] = {}
@@ -326,8 +316,7 @@ class VRPTestingService:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
-            # Get test result
+   
             row = cursor.execute("""
                 SELECT result_data FROM vrp_test_results
                 WHERE id = ?
@@ -371,8 +360,7 @@ class VRPTestingService:
             
             if not results:
                 return None
-            
-            # Prepare comparison data
+     
             comparison = {
                 'tests': results,
                 'metrics': {
@@ -393,25 +381,14 @@ class VRPTestingService:
     
     @staticmethod
     def delete_test(test_id):
-        """
-        Delete a test from the history
-        
-        Args:
-            test_id: ID of the test to delete
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
+
         try:
-            # FIX: Use the correct database path
             db_path = os.path.join(current_app.root_path, 'static', 'data', 'vrp_tests.db')
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
-            # FIX: Delete from the correct table
+   
             cursor.execute("DELETE FROM vrp_test_results WHERE id = ?", (test_id,))
-            
-            # Check if anything was deleted
+   
             rows_deleted = cursor.rowcount
             
             conn.commit()
@@ -420,5 +397,5 @@ class VRPTestingService:
             return rows_deleted > 0
         except Exception as e:
             print(f"Error deleting test: {str(e)}")
-            traceback.print_exc() # Add traceback for better debugging
+            traceback.print_exc()
             return False

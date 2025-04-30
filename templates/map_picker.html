@@ -69,7 +69,6 @@
     <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/map_picker.js') }}"></script>
     <script>
-        // Initialize map with center from Flask
         const lat = {{ center_lat | tojson | safe }};
         const lng = {{ center_lng | tojson | safe }};
         initMap(lat, lng);
@@ -178,47 +177,39 @@
 
     <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Clear any stored location data
         sessionStorage.removeItem('selectedLocations');
         sessionStorage.removeItem('warehouseLocation');
-        
-        // Reset any existing markers if they exist
+
         if (typeof markers !== 'undefined') {
             markers.forEach(marker => {
                 if (marker) marker.remove();
             });
         }
         
-        // Reset location list
         const locationList = document.getElementById('selected-locations');
         if (locationList) {
             locationList.innerHTML = '';
         }
         
-        // Reset warehouse indicator
         const warehouseIndicator = document.getElementById('warehouse-indicator');
         if (warehouseIndicator) {
             warehouseIndicator.style.display = 'none';
         }
         
-        // Reset address form
         const addressForm = document.getElementById('address-form');
         if (addressForm) {
             addressForm.reset();
         }
 
-        // Ensure warehouse button is active and destination button is inactive
         document.getElementById('warehouse-btn').classList.add('active');
         document.getElementById('destination-btn').classList.remove('active');
         
-        // Set the initial location mode to 'warehouse'
         if (typeof setLocationMode === 'function') {
             setLocationMode('warehouse');
         }
     });
     </script>
 
-    <!-- Address input modal -->
     <div id="address-modal" class="modal">
         <div class="modal-content">
             <span class="close-modal">&times;</span>

@@ -12,7 +12,6 @@ def index():
 @main_bp.route('/map_picker')
 def map_picker():
     """Interactive map for selecting warehouse and delivery locations"""
-    # Get default center coordinates from service
     center_lat, center_lng = MainService.get_default_map_center()
     
     return render_template('map_picker.html', center_lat=center_lat, center_lng=center_lng)
@@ -25,6 +24,5 @@ def clusters_page():
 @main_bp.route('/vrp_solver')
 def vrp_solver():
     """Page for solving vehicle routing problems"""
-    # Get all presets for the solver page
     presets = PresetService.get_all_presets()
     return render_template('vrp_solver.html', presets=presets)

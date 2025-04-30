@@ -4,7 +4,7 @@ from models.location import Location, Intersection
 from models.cluster import Cluster
 from models.preset import Preset, Warehouse
 from sqlalchemy import desc
-from utils.database import execute_read, execute_write  # Add this import at the top
+from utils.database import execute_read, execute_write  
 
 class PresetService:
     @staticmethod
@@ -197,4 +197,4 @@ class PresetService:
             return presets_data
         except Exception as e:
             print(f"Error in get_all_presets_basic: {str(e)}")
-            return []  # Return empty list on error
+            return [] 

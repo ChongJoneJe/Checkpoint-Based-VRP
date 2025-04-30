@@ -12,7 +12,6 @@ class ClusteringService:
         """Get clusters for visualization"""
         if preset_id:
             try:
-                # Use raw SQL to get preset data instead of SQLAlchemy
                 preset_query = """
                     SELECT p.id, p.name, p.created_at
                     FROM presets p
@@ -44,7 +43,6 @@ class ClusteringService:
                         'city': warehouse_row['city'] or ''
                     }
                 
-                # Keep existing destination query but only fetch locations
                 destinations_query = """
                     SELECT l.id, l.lat, l.lon, l.street, l.neighborhood,
                            lc.cluster_id, c.name as cluster_name, 
@@ -86,10 +84,8 @@ class ClusteringService:
                         # Add location to cluster
                         clusters[cluster_id]['locations'].append(location)
                     else:
-                        # Add to noise points (no cluster)
                         noise_points.append(location)
 
-                # If there are noise points, add them as a special "cluster"
                 if noise_points:
                     clusters['noise'] = {
                         'id': 'noise',
@@ -133,7 +129,6 @@ class ClusteringService:
                 print(f"Error in get_clusters with preset_id: {str(e)}")
                 return [], None, {"total_locations": 0, "num_clusters": 0, "noise_points": 0}
         else:
-            # Original implementation for "All Locations" view
             query = """
                 SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, l.city,
                        c.id as cluster_id, c.name as cluster_name, 
@@ -203,7 +198,6 @@ class ClusteringService:
                         'development': row['development']
                     })
             
-            # If there are noise points, add them as a special "cluster"
             if noise_points:
                 clusters['noise'] = {
                     'id': 'noise',

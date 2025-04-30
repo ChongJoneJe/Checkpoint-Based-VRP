@@ -5,14 +5,10 @@ let destinationMarkers = [];
 let routeLayer = null;
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Set up event listeners
     document.getElementById('load-preset-btn').addEventListener('click', loadSelectedPreset);
     document.getElementById('solve-btn').addEventListener('click', solveVRP);
 });
 
-/**
- * Load the selected preset
- */
 function loadSelectedPreset() {
     const presetSelect = document.getElementById('presets-dropdown');
     const presetId = presetSelect.value;
@@ -59,22 +55,15 @@ function loadSelectedPreset() {
         });
 }
 
-/**
- * Initialize the map
- */
+
 function initializeMap() {
-    // Create map centered on warehouse if available, otherwise use default center
     const center = currentPreset && currentPreset.warehouse ? 
         currentPreset.warehouse : [3.1390, 101.6869];
     
     map = Utils.createMap('map', center, 13);
 }
 
-/**
- * Update the map with the current preset locations
- */
 function updateMapWithPreset() {
-    // Clear existing markers
     Utils.clearMapLayers(map);
     warehouseMarker = null;
     destinationMarkers = [];
@@ -103,9 +92,6 @@ function updateMapWithPreset() {
     map.fitBounds(group.getBounds().pad(0.1));
 }
 
-/**
- * Solve the VRP with the current preset
- */
 function solveVRP() {
     // Get values from form
     const numVehicles = parseInt(document.getElementById('num-vehicles').value) || 1;
@@ -136,17 +122,14 @@ function solveVRP() {
         if (data.status === 'success') {
             displayResults(data);
         } else {
-            // Show error
+            
         }
     })
     .catch(error => {
-        // Handle error
+       
     });
 }
 
-/**
- * Display the solver results
- */
 function displayResults(data) {
     const resultsPanel = document.getElementById('results-panel');
     const resultsContent = document.getElementById('results-content');
@@ -182,29 +165,20 @@ function displayResults(data) {
     resultsPanel.classList.remove('hidden');
 }
 
-/**
- * Draw the calculated routes on the map
- */
 function drawRoutes(routes) {
-    // Clear any existing routes
     if (routeLayer) {
         map.removeLayer(routeLayer);
     }
-    
-    // Create a feature group for all routes
+
     routeLayer = L.featureGroup().addTo(map);
     
-    // Define colors for different routes
     const colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#ffff33', '#a65628', '#f781bf'];
     
-    // Draw each route
     routes.forEach((route, index) => {
         const color = colors[index % colors.length];
         
-        // Convert stop indices to coordinates
         const coordinates = [];
         
-        // Start at warehouse
         coordinates.push(currentPreset.warehouse);
         
         // Add each stop
@@ -215,23 +189,19 @@ function drawRoutes(routes) {
         // End at warehouse
         coordinates.push(currentPreset.warehouse);
         
-        // Create a polyline for this route
         L.polyline(coordinates, {
             color: color,
             weight: 4,
             opacity: 0.7
         }).addTo(routeLayer);
         
-        // Add direction arrows
         for (let i = 0; i < coordinates.length - 1; i++) {
             const p1 = coordinates[i];
             const p2 = coordinates[i + 1];
             
-            // Calculate midpoint
             const lat = (p1[0] + p2[0]) / 2;
             const lng = (p1[1] + p2[1]) / 2;
             
-            // Add arrow marker
             L.marker([lat, lng], {
                 icon: L.divIcon({
                     className: 'direction-arrow',

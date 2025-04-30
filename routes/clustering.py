@@ -15,7 +15,6 @@ def get_clusters():
     preset_id = request.args.get('preset_id', None)
     
     try:
-        # Get cluster data from service
         clusters, warehouse, stats = ClusteringService.get_clusters(preset_id)
         
         return jsonify({

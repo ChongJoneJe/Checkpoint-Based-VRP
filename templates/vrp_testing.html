@@ -131,20 +131,7 @@
             color: white;
             font-size: 10px;
         }
-        
-        .destination-icon {
-            background-color: #3388ff;
-            width: 16px;
-            height: 16px;
-            border-radius: 8px;
-            border: 2px solid white;
-            text-align: center;
-            line-height: 14px;
-            font-size: 10px;
-            font-weight: bold;
-            color: white;
-        }
-        
+
         .mt-3 {
             margin-top: 1rem;
         }
@@ -221,13 +208,11 @@
             100% { transform: scale(1); }
         }
         
-        /* Fix container overflow issues */
         .card-body {
             padding: 20px;
             overflow-x: auto;
         }
         
-        /* Responsive adjustments */
         @media (max-width: 768px) {
             .row {
                 flex-direction: column;
@@ -244,13 +229,11 @@
             }
         }
         
-        /* Make test map responsive */
         #map-container {
             width: 100%;
             overflow: hidden;
         }
         
-        /* Better spacing for test configuration */
         #test-configuration {
             padding: 15px;
         }
@@ -332,7 +315,6 @@
             margin-bottom: 20px;
         }
 
-        /* Force proper grid layout */
         .main-content {
             display: block;
             width: 100%;
@@ -345,25 +327,21 @@
             margin-right: 0;
         }
 
-        /* First row - force horizontal layout */
         .main-content > .row:first-child {
             flex-direction: row !important;
         }
 
-        /* Second row - ensure full width and clear positioning */
         .main-content > .row:nth-child(2) {
             clear: both;
             margin-top: 30px;
         }
 
-        /* Ensure results panel takes full width */
         #results-panel {
             width: 100%;
             clear: both;
             margin-top: 30px;
         }
 
-        /* Ensure proper column widths */
         .col-md-4 {
             width: 33.33% !important;
             float: left;
@@ -375,13 +353,11 @@
             clear: both;
         }
 
-        /* Override any conflicting card styles */
         .card {
-            overflow: hidden !important; /* Change from visible to hidden */
+            overflow: hidden !important; 
             height: auto !important;
         }
 
-        /* Make all cards in a row the same height */
         .row {
             display: flex;
             flex-wrap: wrap;
@@ -417,11 +393,9 @@
         </header>
         
         <div class="main-content">
-            <!-- First row with 3 columns -->
             <div class="row mb-4">
                 <div class="col-md-4">
-                    <!-- Snapshots Panel -->
-                    <div class="card h-100"> <!-- Use h-100 for equal height -->
+                    <div class="card h-100"> 
                         <div class="card-header">
                             <h3 class="m-0">Database Snapshots</h3>
                             <button id="create-snapshot-btn" class="btn btn-primary btn-sm mt-2">
@@ -429,25 +403,21 @@
                             </button>
                         </div>
                         <div class="card-body">
-                            <div id="snapshots-container">
-                                <!-- Loading indicator -->
-                            </div>
+                            <div id="snapshots-container"></div>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <!-- Test Configuration Panel -->
-                    <div class="card h-100" id="test-panel"> <!-- Use h-100 -->
+                    <!-- tests -->
+                    <div class="card h-100" id="test-panel"> 
                         <div class="card-header">
                             <h3 class="m-0">Run VRP Test</h3>
                             <span class="badge bg-primary" id="selected-snapshot-badge">None selected</span>
                         </div>
                         <div class="card-body">
                             <div id="test-configuration">
-                                <!-- Hidden field for selected snapshot -->
                                 <input type="hidden" id="selected-snapshot">
                                 
-                                <!-- Visible test form -->
                                 <div id="test-form" class="hidden">
                                     <div class="form-group mb-3">
                                         <label for="preset-select" class="form-label">Preset:</label>
@@ -479,12 +449,6 @@
                                         </select>
                                     </div>
                                     
-                                    <div class="form-group mb-3">
-                                        <label for="api-key" class="form-label">OpenRouteService API Key (Optional):</label>
-                                        <input type="text" id="api-key" class="form-control" placeholder="Uses app default if not provided">
-                                        <small class="form-text text-muted">Only provide if you have your own key. The app uses a default key.</small>
-                                    </div>
-                                    
                                     <div class="d-grid gap-2 d-md-flex mt-4">
                                         <button id="run-test-submit" class="btn btn-success">
                                             <i class="fas fa-play"></i> Run Test
@@ -500,25 +464,19 @@
                     </div>
                 </div>
                 <div class="col-md-5">
-                    <!-- Test History Panel -->
-                    <div class="card h-100"> <!-- Use h-100 -->
+                    <!-- history -->
+                    <div class="card h-100"> 
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h3>Test History</h3>
-                            <button id="compare-tests-btn" class="btn btn-sm btn-primary" disabled>
-                                <i class="fas fa-chart-bar"></i> Compare
-                            </button>
                         </div>
-                        <div class="card-body overflow-auto"> <!-- Add overflow-auto for scrolling -->
-                            <div id="test-history-content">
-                                <!-- History table -->
-                            </div>
+                        <div class="card-body overflow-auto"> 
+                            <div id="test-history-content"></div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Second row with results panel taking full width -->
-            <div class="row mt-4"> <!-- Use mt-4 for spacing -->
+            <div class="row mt-4"> 
                 <div class="col-12">
                     <div class="card mb-4 hidden" id="results-panel">
                         <div class="card-header">
@@ -526,10 +484,8 @@
                         </div>
                         <div class="card-body">
                             <div id="results-content">
-                                <!-- Results will be displayed here -->
                             </div>
 
-                            <!-- Dynamic Insertion Section (Initially Hidden) -->
                             <div id="dynamic-section" class="mt-4 p-3 border rounded hidden">
                                 <h5>Add Dynamic Locations</h5>
                                 <p id="dynamic-instructions" class="text-muted small">Click the button below, then click on the map to select a pickup location, followed by a dropoff location.</p>
@@ -537,14 +493,11 @@
                                     <i class="fas fa-map-marker-alt"></i> Add New Location Pair
                                 </button>
                                 <div id="dynamic-locations-list" class="list-group mb-3">
-                                    <!-- Added dynamic locations will be listed here -->
                                 </div>
                                 <div id="dynamic-insertion-controls" class="mt-3">
-                                    <!-- Controls populated by setupDynamicInsertionUI -->
                                     <p class="text-muted small">Add location pairs first, then select vehicle and click Insert.</p>
                                 </div>
                             </div>
-                            <!-- End Dynamic Insertion Section -->
 
                             <div id="map-container" class="mt-4">
                                 <div id="test-map" style="height: 600px;"></div>
@@ -563,9 +516,7 @@
     <script src="{{ url_for('static', filename='js/vrp_testing.js') }}"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Initialize Bootstrap components
         document.addEventListener('DOMContentLoaded', function() {
-            // Enable Bootstrap tabs and accordions
             const triggerTabList = [].slice.call(document.querySelectorAll('#dashboardTabs button'));
             triggerTabList.forEach(function(triggerEl) {
                 const tabTrigger = new bootstrap.Tab(triggerEl);
@@ -574,10 +525,7 @@
                     tabTrigger.show();
                 });
             });
-            
-            // Add any additional initialization needed
 
-            // Add event listener for static vs dynamic comparison button
             const comparisonBtn = document.getElementById('run-comparison-btn');
             if (comparisonBtn) {
                 comparisonBtn.addEventListener('click', runStaticDynamicComparison);

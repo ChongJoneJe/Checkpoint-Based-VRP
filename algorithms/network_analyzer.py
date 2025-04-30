@@ -16,7 +16,6 @@ class NetworkAnalyzer:
     
     def __init__(self):
         """Initialize the network analyzer"""
-        # Configure osmnx using new settings API
         ox.settings.use_cache = True
         ox.settings.log_console = False
         
@@ -430,8 +429,7 @@ class NetworkAnalyzer:
                 points = [Point(lon, lat) for lat, lon in location_coords]
                 polygon = unary_union(points).convex_hull
                 
-                # Buffer the polygon to include some area around the cluster
-                polygon = polygon.buffer(0.002)  # ~200m radius
+                polygon = polygon.buffer(0.002)  
             
             # If warehouse is provided, extend the area to include it
             if warehouse_coords:

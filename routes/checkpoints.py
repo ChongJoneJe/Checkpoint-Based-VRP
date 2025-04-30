@@ -23,7 +23,6 @@ def view_cluster_checkpoints(cluster_id):
             one=True
         )
         
-        # Format data for response - using dictionary syntax instead of .get()
         formatted_checkpoints = []
         for cp in checkpoints:
             formatted_checkpoints.append({
@@ -38,7 +37,7 @@ def view_cluster_checkpoints(cluster_id):
         return jsonify({
             'status': 'success',
             'checkpoints': formatted_checkpoints,
-            'cluster': dict(cluster) if cluster else {}  # Convert Row to dict for JSON
+            'cluster': dict(cluster) if cluster else {}  
         })
         
     except Exception as e:
@@ -60,7 +59,7 @@ def add_checkpoint():
     lon = request.form.get('lon', type=float)
     from_type = request.form.get('from_type', 'manual')
     to_type = request.form.get('to_type', 'manual')
-    confidence = 1.0  # Manual entries are high confidence
+    confidence = 1.0 
     
     if not cluster_id or not lat or not lon:
         flash("Missing required information", "error")
@@ -78,7 +77,7 @@ def add_checkpoint():
     return redirect(url_for('checkpoints.view_cluster_checkpoints', cluster_id=cluster_id))
 
 @checkpoints_bp.route('/checkpoint/<int:checkpoint_id>/delete', methods=['POST'])
-def delete_checkpoint_html(checkpoint_id):  # Renamed from delete_checkpoint to delete_checkpoint_html
+def delete_checkpoint_html(checkpoint_id):  
     """Delete a checkpoint with HTML response"""
     # Get cluster ID for redirection
     checkpoint = execute_read(
@@ -263,11 +262,8 @@ def generate_cluster_checkpoints(cluster_id):
     """API endpoint to generate security checkpoints for a cluster"""
     try:
         from algorithms.dbscan import GeoDBSCAN
-        
-        # Create DBSCAN instance for network analysis
         dbscan = GeoDBSCAN()
-        
-        # Generate checkpoints with regenerate=True
+
         checkpoints = dbscan.identify_cluster_access_points(cluster_id, regenerate=True)
         
         return jsonify({

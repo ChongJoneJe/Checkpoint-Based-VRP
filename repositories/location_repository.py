@@ -14,7 +14,6 @@ class LocationRepository:
             one=True
         )
         
-        # Convert Row object to dict to enable get() method usage
         if row:
             return dict(row)
         return None
@@ -41,7 +40,6 @@ class LocationRepository:
     def update_address(location_id, address_data):
         """Update address data for existing location"""
         try:
-            # Ensure we have the right number of parameters - there were 7 placeholders but only 6 values
             return execute_write(
                 """UPDATE locations SET 
                    street = COALESCE(?, street),
@@ -63,7 +61,6 @@ class LocationRepository:
             )
         except Exception as e:
             print(f"ERROR in update_address: {str(e)}")
-            # Return -1 to indicate failure
             return -1
     
     @staticmethod
@@ -177,13 +174,11 @@ class LocationRepository:
             query += " AND l.id != ?"
             params.append(exclude_location_id)
         
-        # Add an additional distance calculation to filter more precisely
         query += " ORDER BY ((l.lat - ?)*(l.lat - ?) + (l.lon - ?)*(l.lon - ?)) ASC"
         params.extend([lat, lat, lon, lon])
         
         results = execute_read(query, params)
         
-        # Further filter the results to only include locations that actually have a cluster assigned
         return [loc for loc in results if loc['cluster_id'] is not None]
     
     @staticmethod
@@ -193,7 +188,6 @@ class LocationRepository:
         
         if existing:
             location_id = existing['id']
-            # Update address if needed
             if (existing.get('street') != address.get('street') or
                 existing.get('neighborhood') != address.get('neighborhood')):
                 LocationRepository.update_address(location_id, address)

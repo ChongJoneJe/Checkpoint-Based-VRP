@@ -16,14 +16,11 @@
                 <h3>Select Preset:</h3>
                 <select id="preset-select" class="form-control">
                     <option value="all">All Locations</option>
-                    <!-- Presets will be loaded here dynamically -->
                 </select>
             </div>
             
-            <!-- Add warehouse info section -->
-            <div id="warehouse-info" style="display: none;">
-                <!-- Warehouse details will be populated here -->
-            </div>
+            <!-- warehouse-->
+            <div id="warehouse-info" style="display: none;"></div>
             
             <div id="cluster-stats">
                 <h3>Clustering Stats</h3>
@@ -35,11 +32,10 @@
             </div>
             
             <div id="cluster-list">
-                <!-- Clusters will be listed here -->
                 <p>Loading clusters...</p>
             </div>
 
-            <!-- Checkpoint controls - only shown when a cluster is selected -->
+            <!-- checkpoints -->
             <div id="checkpoint-controls" class="card mt-3 mb-3">
                 <div class="card-header bg-secondary text-white">
                     <h5 class="mb-0">Security Checkpoints</h5>
@@ -71,7 +67,7 @@
                         </div>
                     </div>
                     
-                    <!-- Network visualization -->
+                    <!-- networks -->
                     <div id="network-viz" class="mt-3" style="display: none;">
                         <h6>Network Analysis</h6>
                         <img id="network-image" class="img-fluid" alt="Network visualization">
@@ -82,35 +78,25 @@
         <div id="map"></div>
     </div>
     
-    <!-- Debug panel for development -->
-    <div id="checkpoint-debug-panel"></div>
-    
-    <!-- Scripts -->
+    <!-- scripts -->
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/shapely@0.1.7/dist/shapely.min.js"></script>
-    
-    <!-- Load our JS files in the right order -->
     <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/clusters.js') }}"></script>
     <script src="{{ url_for('static', filename='js/checkpoints.js') }}"></script>
     
-    <!-- Initialize everything once the DOM is ready -->
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Check for debug mode
-            const debugMode = {{ config.get('DEBUG', False) | tojson }};
+            const debugMode = {{ config.get('DEBUG', False) | tojson | safe }};
             if (debugMode) {
                 document.body.classList.add('debug-mode');
             }
             
             Utils.debugLog("DOM ready, initializing modules");
             
-            // Initialize clusters first
             ClusterManager.initialize();
             
-            // Wait a bit before accessing CheckpointManager
             setTimeout(() => {
-                // Set up checkpoint visibility toggle
                 document.getElementById('show-checkpoints').addEventListener('change', function() {
                     if (window.CheckpointManager) {
                         Utils.debugLog("Toggle checkpoint visibility: " + this.checked);
@@ -121,40 +107,6 @@
                 Utils.debugLog("Initialization complete");
             }, 500);
         });
-    </script>
-    
-    <!-- Add this after your other initialization code -->
-    <script>
-        // Add after your existing DOMContentLoaded code
-        
-        // Diagnostic check after 2 seconds
-        setTimeout(() => {
-            Utils.debugLog("Running API diagnostics...");
-            Utils.checkApiEndpoints();
-            
-            // Check DOM structure
-            const checkpointList = document.querySelector('#checkpoint-list .checkpoint-items');
-            Utils.debugLog(`Checkpoint list container exists: ${!!checkpointList}`);
-            
-            // Force reload presets as a test
-            Utils.debugLog("Explicitly reloading presets...");
-            ClusterManager.loadPresets();
-            
-            // Look for any ongoing XHR errors
-            window.addEventListener('error', function(e) {
-                Utils.debugLog(`Global error caught: ${e.message}`);
-            });
-        }, 2000);
-    </script>
-    
-    <!-- Add near the end of your script section -->
-    <script>
-        // Test the checkpoint generation API directly
-        setTimeout(() => {
-            Utils.debugLog("Testing checkpoint generation API...");
-            // Change 8 to whatever cluster ID you're working with
-            Utils.testCheckpointGeneration(8);
-        }, 3000);
     </script>
 </body>
 </html>

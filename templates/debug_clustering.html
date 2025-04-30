@@ -39,7 +39,6 @@
                     </div>
                     
                     <div id="search-results" class="mt-3">
-                        <!-- Search results will be displayed here -->
                     </div>
                 </div>
             </div>
@@ -84,7 +83,6 @@
         const searchInput = document.getElementById('search-street');
         const searchResults = document.getElementById('search-results');
         
-        // Handle search button click
         searchBtn.addEventListener('click', function() {
             const searchTerm = searchInput.value.trim();
             if (searchTerm.length < 3) {
@@ -92,10 +90,8 @@
                 return;
             }
             
-            // Show loading indicator
             searchResults.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm" role="status"></div> Searching...</div>';
             
-            // Perform search
             fetch(`/clustering/search_locations?query=${encodeURIComponent(searchTerm)}`)
                 .then(response => response.json())
                 .then(data => {
@@ -113,7 +109,6 @@
                             html += '</div>';
                             searchResults.innerHTML = html;
                             
-                            // Add click event to location items
                             document.querySelectorAll('.location-item').forEach(item => {
                                 item.addEventListener('click', function() {
                                     const locId = this.dataset.locationId;
@@ -134,7 +129,6 @@
                 });
         });
         
-        // Allow search on Enter key
         searchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 searchBtn.click();

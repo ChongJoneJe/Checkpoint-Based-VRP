@@ -2,20 +2,17 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
-# Ensure this path matches the one in app.py's SQLALCHEMY_DATABASE_URI
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'data', 'locations.db'))
 
 def ensure_db_exists():
     """Make sure database file exists"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     if not os.path.exists(DB_PATH):
-        # Import and use the reset_db functionality instead of recreating schema here
         from reset_db import reset_database
         reset_database()
 
 def get_db_connection():
     """Get a database connection with foreign keys enabled"""
-    # Ensure directory exists
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     
     conn = sqlite3.connect(DB_PATH)

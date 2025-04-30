@@ -1,13 +1,7 @@
-/**
- * Shared utilities for the application
- */
 const Utils = (function() {
-    // Flag to enable/disable debug mode
     const DEBUG_MODE = true;
     
-    /**
-     * Show a notification to the user
-     */
+ 
     function showNotification(message, type = 'info') {
         // Create notification container if it doesn't exist
         let container = document.getElementById('notification-container');
@@ -46,19 +40,13 @@ const Utils = (function() {
         }
     }
     
-    /**
-     * Hide notification
-     */
     function hideNotification() {
         const notification = document.getElementById('notification');
         if (notification) {
             notification.classList.add('hidden');
         }
     }
-    
-    /**
-     * Log debug messages
-     */
+
     function debugLog(message) {
         // Always log to console
         console.log(`CHECKPOINT DEBUG: ${message}`);
@@ -73,9 +61,6 @@ const Utils = (function() {
         }
     }
 
-    /**
-     * Check API endpoints
-     */
     function checkApiEndpoints() {
         const endpoints = [
             '/presets/get_presets',
@@ -101,9 +86,6 @@ const Utils = (function() {
         });
     }
 
-    /**
-     * Test checkpoint generation API
-     */
     function testCheckpointGeneration(clusterId) {
         Utils.debugLog(`Testing checkpoint generation API for cluster ${clusterId}`);
         
@@ -289,9 +271,6 @@ const Utils = (function() {
         }
     }
     
-    /**
-     * Hide loading indicator
-     */
     function hideLoadingIndicator() {
         const loadingOverlay = document.getElementById('loading-overlay');
         if (loadingOverlay) {

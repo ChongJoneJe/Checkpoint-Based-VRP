@@ -176,17 +176,14 @@ class TravellingSalesmanProblem:
         for i in range(n):
             for j in range(n):
                 dist[i][j] = self.distances[idx_to_node[i]][idx_to_node[j]]
-        
-        # DP state: dp[mask][i] = minimum distance to visit nodes in mask and end at node i
-        # mask is a binary representation of visited nodes
+
         dp = {}
         
         # Initialize with just the start node
-        dp[(1, 0)] = 0  # Starting at node 0 with only node 0 visited
+        dp[(1, 0)] = 0 
         
         # Fill DP table for all subsets of nodes
         for mask in range(2, 1 << n):
-            # Skip invalid states (must include start node)
             if not (mask & 1):
                 continue
                 

@@ -6,10 +6,12 @@ import time
 import traceback
 import numpy as np
 import math
+import re
 from services.vrp_service import VRPService
 from services.vrp_testing_service import VRPTestingService
 from algorithms.enhanced_vrp import EnhancedVehicleRoutingProblem, HAS_ORTOOLS
 from services.cache_service import CacheService
+from utils.json_helpers import NumpyEncoder
 import random
 from math import radians, sin, cos, sqrt, atan2
 import openrouteservice
@@ -19,238 +21,226 @@ class VRPTestScenarioService:
 
     @staticmethod
     def prepare_test_data(snapshot_id, preset_id, api_key=None):
-        # --- Add Input Validation ---
-        if not snapshot_id or not isinstance(snapshot_id, str):
-            print(f"[ERROR prepare_test_data] Invalid snapshot_id: {snapshot_id}")
-            return {'status': 'error', 'message': 'Invalid or missing snapshot ID'}
-        if not preset_id or not isinstance(preset_id, str):
-            print(f"[ERROR prepare_test_data] Invalid preset_id: {preset_id}")
-            return {'status': 'error', 'message': 'Invalid or missing preset ID'}
-        # --- End Input Validation ---
-
-        cache_service = CacheService()
+        """Prepares data for checkpoint-based VRP, including distance matrix."""
+        # Use snapshot_id (without extension) and preset_id for cache key
         cache_key = f"checkpoint_matrix_{snapshot_id}_{preset_id}"
-        print(f"[DEBUG prepare_test_data] Using cache key: {cache_key}") # Add logging
+        cached_data = CacheService().get(cache_key) # Correct: Get instance first
+        if cached_data:
+            print(f"[DEBUG prepare_test_data] Using cached data for key: {cache_key}")
+            # --- ENSURE API KEY IS PRESENT IN CACHED DATA ---
+            if 'api_key' not in cached_data or cached_data['api_key'] is None:
+                 cached_data['api_key'] = api_key # Add/update the key from the current call
+                 print("[DEBUG prepare_test_data] Added/Updated api_key in cached data.")
+            # --- END ENSURE API KEY ---
+            # Ensure snapshot_id and preset_id are present in cached data
+            if 'snapshot_id' not in cached_data:
+                 cached_data['snapshot_id'] = snapshot_id
+            if 'preset_id' not in cached_data:
+                 cached_data['preset_id'] = preset_id
+            return cached_data
+
+        print(f"[DEBUG prepare_test_data] Cache miss for key: {cache_key}. Preparing fresh data.")
 
         try:
-            snapshot_path = os.path.join(current_app.root_path, "vrp_test_data", snapshot_id)
-            preset_data = VRPTestingService.get_preset_from_snapshot(snapshot_path, preset_id)
-            if not preset_data:
-                return None
+            # Construct DB path using snapshot_id
+            if snapshot_id.endswith('.sqlite'):
+                 db_snapshot_filename = snapshot_id # Already has extension
+            else:
+                 db_snapshot_filename = f"{snapshot_id}.sqlite" # Add extension
 
-            conn = sqlite3.connect(snapshot_path)
+            # Use a robust way to get the base path
+            try:
+                from flask import current_app
+                base_path = os.path.join(current_app.root_path, "vrp_test_data")
+            except ImportError:
+                base_path = os.path.join(os.path.dirname(__file__), '..', 'vrp_test_data')
+                print(f"[WARN prepare_test_data] Not in Flask context, using relative path: {base_path}")
+
+            db_path = os.path.join(base_path, db_snapshot_filename)
+            print(f"[DEBUG prepare_test_data] Constructed DB path: {db_path}")
+
+            if not os.path.exists(db_path):
+                print(f"[ERROR prepare_test_data] Snapshot ID received: {snapshot_id}")
+                return {'status': 'error', 'message': f'Snapshot database not found: {db_path}'}
+
+            conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
 
-            warehouse_query = """
-                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development
+            # --- CORRECTED: Fetch warehouse and destinations using schema ---
+            warehouse = None
+            destinations = []
+
+            # Query for Warehouse (is_warehouse = 1)
+            cursor.execute("""
+                SELECT l.id, l.lat, l.lon, l.street, l.city, l.postcode
                 FROM locations l
                 JOIN preset_locations pl ON l.id = pl.location_id
                 WHERE pl.preset_id = ? AND pl.is_warehouse = 1
                 LIMIT 1
-            """
-            warehouse_row = conn.execute(warehouse_query, (preset_id,)).fetchone()
-            warehouse = {
-                'id': warehouse_row['id'],
-                'lat': warehouse_row['lat'],
-                'lon': warehouse_row['lon'],
-                'street': warehouse_row['street'],
-                'neighborhood': warehouse_row['neighborhood'],
-                'development': warehouse_row['development']
-            } if warehouse_row else None
+            """, (preset_id,))
+            warehouse_row = cursor.fetchone()
 
-            if not warehouse:
+            if warehouse_row:
+                warehouse = {
+                    'id': warehouse_row['id'],
+                    'lat': warehouse_row['lat'],
+                    'lon': warehouse_row['lon'],
+                    'address': f"{warehouse_row['street'] or ''}, {warehouse_row['postcode'] or ''} {warehouse_row['city'] or ''}".strip(', '),
+                    'type': 'warehouse' # Add type for consistency
+                }
+                print(f"[DEBUG prepare_test_data] Found warehouse: {warehouse}")
+            else:
                 conn.close()
-                print("Error: Warehouse not found for preset.")
-                return None
+                return {'status': 'error', 'message': f'Warehouse not found for Preset ID {preset_id} in snapshot {snapshot_id}'}
 
-            destinations_query = """
-                SELECT l.id, l.lat, l.lon, l.street, l.neighborhood, l.development, 
-                       lc.cluster_id, c.name as cluster_name
+            # Query for Destinations (is_warehouse = 0 or NULL)
+            cursor.execute("""
+                SELECT l.id, l.lat, l.lon, l.street, l.city, l.postcode
                 FROM locations l
                 JOIN preset_locations pl ON l.id = pl.location_id
-                LEFT JOIN location_clusters lc ON l.id = lc.location_id
-                LEFT JOIN clusters c ON lc.cluster_id = c.id
-                WHERE pl.preset_id = ? AND pl.is_warehouse = 0
-            """
-            destinations = [
-                {
+                WHERE pl.preset_id = ? AND (pl.is_warehouse = 0 OR pl.is_warehouse IS NULL)
+            """, (preset_id,))
+            destination_rows = cursor.fetchall()
+
+            for row in destination_rows:
+                destinations.append({
                     'id': row['id'],
                     'lat': row['lat'],
                     'lon': row['lon'],
-                    'street': row['street'],
-                    'neighborhood': row['neighborhood'],
-                    'development': row['development'],
-                    'cluster_id': row['cluster_id'],
-                    'cluster_name': row['cluster_name']
-                }
-                for row in conn.execute(destinations_query, (preset_id,))
-            ]
+                    'address': f"{row['street'] or ''}, {row['postcode'] or ''} {row['city'] or ''}".strip(', '),
+                    'type': 'destination' # Add type for consistency
+                })
+            print(f"[DEBUG prepare_test_data] Found {len(destinations)} destinations.")
+            # --- END CORRECTION ---
 
-            required_clusters = {dest['cluster_id'] for dest in destinations if dest['cluster_id']}
+            # Determine required clusters from destination locations
+            required_clusters = set()
+            destination_coords = [(float(d['lat']), float(d['lon'])) for d in destinations if 'lat' in d and 'lon' in d]
+
+            if not destination_coords:
+                 print("[WARN prepare_test_data] No valid destination coordinates found in preset.")
+            else:
+                # Find clusters for destinations more efficiently
+                # Get location IDs directly from the destinations list we just built
+                dest_loc_ids = [d['id'] for d in destinations]
+
+                if dest_loc_ids:
+                    placeholders = ','.join('?' * len(dest_loc_ids))
+                    cluster_query = f"SELECT DISTINCT cluster_id FROM location_clusters WHERE location_id IN ({placeholders})"
+                    try:
+                        cursor.execute(cluster_query, dest_loc_ids)
+                        required_clusters = {row['cluster_id'] for row in cursor.fetchall() if row['cluster_id'] is not None}
+                        print(f"[DEBUG prepare_test_data] Required clusters from destinations: {required_clusters}")
+                    except sqlite3.OperationalError as op_err:
+                         print(f"[ERROR prepare_test_data] SQLite error finding destination clusters: {op_err}. Might be too many coordinates for IN clause.")
+                         conn.close()
+                         return {'status': 'error', 'message': f'Database error finding destination clusters: {op_err}'}
+                else:
+                    print("[WARN prepare_test_data] Could not find location IDs for destination coordinates.")
+
 
             if not required_clusters:
-                return {
-                    'warehouse': warehouse,
-                    'destinations': destinations,
-                    'clusters': [],
-                    'checkpoints': [],
-                    'has_clusters': False
-                }
+                 print("[WARN prepare_test_data] No clusters identified for the given destinations.")
 
-            checkpoints_query = """
-                SELECT cp.id, cp.lat, cp.lon, cp.cluster_id,
-                       cp.confidence, c.name as cluster_name
-                FROM security_checkpoints cp
-                JOIN clusters c ON cp.cluster_id = c.id
-                WHERE cp.cluster_id IN ({})
-            """.format(','.join('?' * len(required_clusters)))
 
-            # --- Checkpoint Query ---
-            try:
-                print(f"[DEBUG prepare_test_data] Executing checkpoints query for clusters: {list(required_clusters)}") # Log before query
-                checkpoints_rows = conn.execute(checkpoints_query, list(required_clusters)).fetchall()
-                print(f"[DEBUG prepare_test_data] Found {len(checkpoints_rows)} raw checkpoints from DB.")
-            except sqlite3.OperationalError as db_error:
-                print(f"Database error executing checkpoints query: {db_error}")
-                conn.close()
-                return {'status': 'error', 'message': f"DB error fetching checkpoints: {db_error}"}
-            except Exception as query_error:
-                print(f"[ERROR prepare_test_data] Unexpected error executing checkpoints query: {query_error}")
-                traceback.print_exc() # Print full traceback for query error
-                conn.close()
-                return {'status': 'error', 'message': f"Error fetching checkpoints: {query_error}"}
-            # --- End Checkpoint Query ---
-
+            # Fetch active routing checkpoints covering these clusters
             active_routing_checkpoints = []
-            checkpoint_coord_to_clusters = {} # Map "lat,lon" -> [cluster_ids]
+            checkpoint_to_clusters = {} # Map "lat,lon" -> [cluster_ids]
+            if required_clusters:
+                placeholders_clusters = ','.join('?' * len(required_clusters))
+                print(f"[DEBUG prepare_test_data] Executing checkpoints query for clusters: {list(required_clusters)}")
+                # Use the correct table name 'security_checkpoints'
+                cursor.execute(
+                    f"SELECT id, lat, lon, cluster_id FROM security_checkpoints WHERE cluster_id IN ({placeholders_clusters})",
+                    list(required_clusters)
+                )
+                unique_cps = {}
+                for row in cursor.fetchall():
+                    cp_key = f"{row['lat']:.6f},{row['lon']:.6f}"
+                    if cp_key not in unique_cps:
+                        unique_cps[cp_key] = {
+                            'id': row['id'], 'lat': row['lat'], 'lon': row['lon'],
+                            'type': 'checkpoint', 'clusters_served': set()
+                        }
+                    unique_cps[cp_key]['clusters_served'].add(row['cluster_id'])
+                    if cp_key not in checkpoint_to_clusters:
+                        checkpoint_to_clusters[cp_key] = []
+                    if row['cluster_id'] not in checkpoint_to_clusters[cp_key]:
+                         checkpoint_to_clusters[cp_key].append(row['cluster_id'])
 
-            for cp in checkpoints_rows:
-                cp_id, cp_lat, cp_lon, cp_cluster_id, cp_confidence, cluster_name = cp
-                clusters_served = [cp_cluster_id] if cp_cluster_id else []
-                cp_dict = {
-                    'id': cp_id,
-                    'lat': cp_lat,
-                    'lon': cp_lon,
-                    'clusters': clusters_served, # Keep original cluster list if needed elsewhere
-                    'clusters_served': clusters_served, # Explicitly add for solver post-processing clarity
-                    'type': 'checkpoint' # Add type field
-                }
-                active_routing_checkpoints.append(cp_dict)
-                coord_key = f"{cp_lat:.6f},{cp_lon:.6f}"
-                checkpoint_coord_to_clusters[coord_key] = clusters_served
+                active_routing_checkpoints = list(unique_cps.values())
+                for cp in active_routing_checkpoints:
+                    cp['clusters_served'] = list(cp['clusters_served'])
+                print(f"[DEBUG prepare_test_data] Found {len(active_routing_checkpoints)} raw checkpoints from DB.")
 
-            cluster_to_checkpoints = {}
-            checkpoint_to_clusters = {}
+            conn.close() # Close DB connection after fetching data
 
-            for cp in checkpoints_rows:
-                cluster_id = cp['cluster_id']
-                cluster_to_checkpoints.setdefault(cluster_id, []).append(cp)
-                cp_key = f"{cp['lat']:.6f},{cp['lon']:.6f}"
-                checkpoint_to_clusters.setdefault(cp_key, []).append(cluster_id)
+            if not active_routing_checkpoints and required_clusters:
+                 print(f"[WARN prepare_test_data] No security checkpoints found for required clusters: {required_clusters}")
 
-            unique_checkpoints = {}
-            for cp in checkpoints_rows:
-                # Access columns directly by name using dictionary-style access
-                cp_lat = cp['lat']
-                cp_lon = cp['lon']
-                cp_cluster_id = cp['cluster_id']
-                # --- CORRECTED ACCESS ---
-                cp_confidence = cp['confidence'] # Direct access
-                # Access optional columns by checking keys first
-                from_type = cp['from_road_type'] if 'from_road_type' in cp.keys() else None
-                to_type = cp['to_road_type'] if 'to_road_type' in cp.keys() else None
-                # --- END CORRECTION ---
 
-                cp_key = f"{cp_lat:.6f},{cp_lon:.6f}"
-                if cp_key not in unique_checkpoints:
-                    unique_checkpoints[cp_key] = {
-                        'id': cp['id'],
-                        'lat': cp_lat,
-                        'lon': cp_lon,
-                        'clusters': [cp_cluster_id],
-                        'from_type': from_type,
-                        'to_type': to_type,
-                        'confidence': cp_confidence,
-                        'type': 'checkpoint' # Ensure type is added
-                    }
-                elif cp_cluster_id not in unique_checkpoints[cp_key]['clusters']:
-                    unique_checkpoints[cp_key]['clusters'].append(cp_cluster_id)
+            # Prepare locations for distance matrix calculation
+            all_locations_for_matrix = [warehouse] + active_routing_checkpoints
+            num_locations = len(all_locations_for_matrix)
 
-            active_routing_checkpoints = list(unique_checkpoints.values())
-
-            if not active_routing_checkpoints or len(active_routing_checkpoints) == 0:
-                return {
-                    'status': 'error', 
-                    'message': 'No valid checkpoints found for the required clusters. Please create checkpoints for these clusters first.'
-                }
-            
-            covered_clusters = set()
-            for cp in active_routing_checkpoints:
-                covered_clusters.update(cp.get('clusters', []))
-            
-            missing_clusters = required_clusters - covered_clusters
-            if missing_clusters:
-                return {
-                    'status': 'error',
-                    'message': f'Missing checkpoints for clusters: {", ".join(map(str, missing_clusters))}. Please create checkpoints for these clusters.'
-                }
-
-            # --- Distance Matrix Calculation ---
-            # Always try ORS if api_key is present, raise error on failure
-            distance_type = 'unknown'
+            # Calculate distance matrix (using ORS or Haversine)
+            ors_client = None
+            distance_type = 'haversine' # Default
             checkpoint_distance_matrix = None
-            ors_client = VRPService._get_ors_client() # Use helper to get client
 
-            if ors_client:
+            if api_key:
                 try:
-                    print("[DEBUG prepare_test_data] Using OpenRouteService for checkpoint distance matrix.")
-                    # --- CORRECTED CALL ---
-                    # Combine warehouse and checkpoints into a single list for the matrix calculation
-                    all_locations_for_matrix = [warehouse] + active_routing_checkpoints
-                    print(f"[DEBUG prepare_test_data] Calculating matrix for {len(all_locations_for_matrix)} total locations (warehouse + checkpoints).")
+                    ors_client = VRPService._get_ors_client(api_key)
+                    if ors_client:
+                        print("[DEBUG prepare_test_data] Using OpenRouteService for checkpoint distance matrix.")
+                        distance_type = 'ors'
+                        print(f"[DEBUG prepare_test_data] Calculating matrix for {num_locations} total locations (warehouse + checkpoints).")
+                        checkpoint_distance_matrix = VRPTestScenarioService._calculate_ors_distance_matrix(
+                            all_locations_for_matrix, ors_client
+                        )
+                        if checkpoint_distance_matrix is None:
+                             print("[WARN prepare_test_data] ORS matrix calculation failed, falling back to Haversine.")
+                             distance_type = 'haversine' # Fallback
+                        else:
+                             print("[DEBUG prepare_test_data] Successfully calculated ORS distance matrix.")
+                    else:
+                         print("[WARN prepare_test_data] Failed to initialize ORS client, using Haversine.")
+                except Exception as ors_err:
+                    print(f"[WARN prepare_test_data] Error initializing or using ORS client: {ors_err}. Using Haversine.")
+                    ors_client = None # Ensure client is None if error occurred
 
-                    # Pass the combined list and the client
-                    # The helper function now returns a NumPy array directly or None
-                    checkpoint_distance_matrix = VRPTestScenarioService._calculate_ors_distance_matrix(
-                        all_locations_for_matrix, ors_client
-                    )
-                    # --- END CORRECTION ---
+            if checkpoint_distance_matrix is None:
+                distance_type = 'haversine'
+                print("[DEBUG prepare_test_data] Using Haversine for checkpoint distance matrix.")
+                checkpoint_distance_matrix = np.zeros((num_locations, num_locations))
+                for i in range(num_locations):
+                    for j in range(i, num_locations):
+                        loc1 = all_locations_for_matrix[i]
+                        loc2 = all_locations_for_matrix[j]
+                        dist = VRPTestScenarioService._haversine_distance(loc1['lat'], loc1['lon'], loc2['lat'], loc2['lon'])
+                        checkpoint_distance_matrix[i, j] = dist
+                        checkpoint_distance_matrix[j, i] = dist
 
-                    # --- ADJUSTED CHECK ---
-                    # Check if the helper function returned None (indicating an error)
-                    if checkpoint_distance_matrix is None:
-                        print(f"[ERROR prepare_test_data] _calculate_ors_distance_matrix returned None.")
-                        conn.close()
-                        return {'status': 'error', 'message': "Failed to calculate ORS distance matrix."}
-                    # --- END ADJUSTMENT ---
-
-                    # If successful, the matrix is already a NumPy array
-                    distance_type = 'road_network'
-                    print("[DEBUG prepare_test_data] Successfully calculated ORS distance matrix.")
-
-                except Exception as e:
-                    # Catch potential errors from _calculate_ors_distance_matrix (like ValueError for invalid locations)
-                    print(f"[ERROR prepare_test_data] Failed during ORS distance matrix calculation: {e}")
-                    conn.close()
-                    return {'status': 'error', 'message': f"Failed during ORS distance matrix calculation: {e}"}
-            else:
-                # No API key or client creation failed
-                print("[ERROR prepare_test_data] ORS client not available. Cannot calculate road network distances.")
-                conn.close()
-                return {'status': 'error', 'message': "ORS client/API key not available for distance calculation."}
-            # --- End Distance Matrix ---
-
-            conn.close() # Close DB connection after use
+             # --- Create node_indices_map (index -> location_data) ---
+            node_indices_map = {}
+            for idx, loc_data in enumerate(all_locations_for_matrix):
+                 loc_data_copy = loc_data.copy()
+                 loc_data_copy['matrix_idx'] = idx
+                 node_indices_map[idx] = loc_data_copy
+            # --- End node_indices_map creation ---
 
             # --- Prepare idx_to_cluster_set mapping ---
-            # This map uses the matrix index (0=warehouse, 1=cp1, 2=cp2, ...)
             idx_to_cluster_set = {}
-            # Warehouse (index 0) serves no clusters
-            idx_to_cluster_set[0] = set()
-            # Checkpoints (index 1 onwards)
-            for idx, cp_data in enumerate(active_routing_checkpoints, 1):
-                 # Use the 'clusters' list from the unique_checkpoints dictionary
-                 idx_to_cluster_set[idx] = set(cp_data.get('clusters', []))
+            idx_to_cluster_set[0] = set() # Warehouse is index 0
+            cp_coord_to_idx = { f"{cp['lat']:.6f},{cp['lon']:.6f}": idx for idx, cp in enumerate(all_locations_for_matrix[1:], 1)}
+            for cp_data in active_routing_checkpoints:
+                 cp_key = f"{cp_data['lat']:.6f},{cp_data['lon']:.6f}"
+                 matrix_idx = cp_coord_to_idx.get(cp_key)
+                 if matrix_idx is not None:
+                      idx_to_cluster_set[matrix_idx] = set(cp_data.get('clusters_served', []))
+                 else:
+                      print(f"[WARN prepare_test_data] Checkpoint {cp_key} not found in matrix mapping.")
             # --- End idx_to_cluster_set mapping ---
 
 
@@ -259,24 +249,34 @@ class VRPTestScenarioService:
                 'destinations': destinations,
                 'required_clusters': list(required_clusters),
                 'active_routing_checkpoints': active_routing_checkpoints,
-                # Store checkpoints by their matrix index (1 to N) for easier lookup later
-                'checkpoint_indices': {idx + 1: cp for idx, cp in enumerate(active_routing_checkpoints)},
-                'checkpoint_to_clusters': checkpoint_to_clusters, # Original mapping by coord string
-                'idx_to_cluster_set': idx_to_cluster_set, # New mapping by matrix index
-                'checkpoint_distance_matrix': checkpoint_distance_matrix, # Store as NumPy array
-                'has_clusters': True,
+                'node_indices_map': node_indices_map,
+                'checkpoint_to_clusters': checkpoint_to_clusters,
+                'idx_to_cluster_set': idx_to_cluster_set,
+                'checkpoint_distance_matrix': checkpoint_distance_matrix,
+                'has_clusters': bool(required_clusters),
                 'distance_type': distance_type,
-                'api_key': api_key, # Pass API key for potential detailed path fetching
-                'db_path': snapshot_path # Pass snapshot path for dynamic insertions
+                'ors_client': ors_client,
+                'snapshot_id': snapshot_id, # ID without extension
+                'preset_id': preset_id,
+                'api_key': api_key
             }
 
+            # Cache the prepared data (excluding non-serializable ORS client)
+            cacheable_data = prepared_dataset.copy()
+            if 'ors_client' in cacheable_data:
+                del cacheable_data['ors_client'] # Don't cache the client object
+            CacheService().set(cache_key, cacheable_data)
+
             return prepared_dataset
+
         except Exception as e:
+            print(f"[ERROR prepare_test_data] Unexpected error preparing data: {e}")
             traceback.print_exc()
             if 'conn' in locals() and conn:
-                conn.close()
-            # Return a structured error
+                try: conn.close()
+                except: pass
             return {'status': 'error', 'message': f"Unexpected error preparing data: {e}"}
+
 
     @staticmethod
     def _calculate_ors_distance_matrix(locations, ors_client):
@@ -406,7 +406,7 @@ class VRPTestScenarioService:
                  return solution # Return the error dict from the solver
 
             # --- Fetch Detailed Path Geometry ---
-            api_key = prepared_data.get('api_key')
+            api_key = prepared_data.get('api_key') # Retrieve the key (should be present now)
             if api_key and solution.get('routes'):
                 print("[DEBUG run_checkpoint_vrp_scenario] Fetching detailed route geometry...")
                 for i, route in enumerate(solution['routes']):
@@ -415,7 +415,7 @@ class VRPTestScenarioService:
                         print(f"[DEBUG run_checkpoint_vrp_scenario] Processing route {i+1} (length {len(path_sequence)}) for detailed path.")
                         try:
                             # --- USE VRPService HELPER ---
-                            route_detailed_geometry = VRPService.get_detailed_route_geometry(path_sequence, api_key)
+                            route_detailed_geometry = VRPService.get_detailed_route_geometry(path_sequence, api_key=api_key)
                             # ---
 
                             if route_detailed_geometry:
@@ -431,7 +431,7 @@ class VRPTestScenarioService:
                          print(f"[WARN run_checkpoint_vrp_scenario]   Route {i+1} has insufficient path points ({len(path_sequence or [])}) for detailed geometry.")
                          solution['routes'][i]['detailed_path_geometry'] = None
             elif not api_key:
-                 print("[WARN run_checkpoint_vrp_scenario] No API key provided, skipping detailed geometry fetch.")
+                 print("[WARN run_checkpoint_vrp_scenario] No API key found in prepared_data, skipping detailed geometry fetch.")
                  # Ensure geometry is None if skipped
                  if 'routes' in solution and solution['routes']:
                      for i in range(len(solution['routes'])):
@@ -466,388 +466,491 @@ class VRPTestScenarioService:
                  'execution_time_ms': int((time.time() - start_time) * 1000)
              }
 
-
     @staticmethod
     def insert_dynamic_locations(current_solution, prepared_data, new_location_pairs, target_vehicle_index, insertion_point_index, algorithm='or_tools'):
         """
-        Insert new location pairs into an existing solution by re-solving the
-        remainder of the target vehicle's route from a specified insertion point.
-
-        Args:
-            current_solution: The original solution dictionary.
-            prepared_data: The original prepared data dictionary (used for context).
-            new_location_pairs: List of {pickup: {...}, dropoff: {...}} dictionaries.
-            target_vehicle_index: Index of the vehicle route to modify.
-            insertion_point_index: Index of the stop in the original route *after* which
-                                   to insert (0 means after warehouse). The driver is assumed
-                                   to be *at* the stop corresponding to this index.
-            algorithm: Routing algorithm to use ('or_tools', 'heuristic', etc.).
-
-        Returns:
-            Dictionary containing the updated solution or an error.
+        Compares two strategies for inserting dynamic P/D pairs and chooses the shorter one:
+        A) Constrained Insertion (Requires OR-Tools): Inserts P/D respecting order, visiting ALL original remaining stops, and covering any new clusters.
+        B) Append P/D: Finishes original segment, then visits P, then D, then Warehouse.
         """
-        start_time = time.time()
-        print(f"[DEBUG insert_dynamic_locations] Start Re-Solve. Target Vehicle: {target_vehicle_index}, At Stop Index: {insertion_point_index}")
+        print(f"[INFO insert_dynamic_locations] Comparing Insertion vs. Append strategies. Target Vehicle: {target_vehicle_index}, At Stop Index: {insertion_point_index}")
+        start_time_comparison = time.time()
 
-        # --- Basic Validation ---
-        if not current_solution or not prepared_data or not new_location_pairs:
-            return {'status': 'error', 'message': 'Missing required data for dynamic insertion'}
-        if target_vehicle_index < 0 or target_vehicle_index >= len(current_solution.get('routes', [])):
-            return {'status': 'error', 'message': f'Invalid target vehicle index: {target_vehicle_index}'}
-        db_path = prepared_data.get('db_path')
-        if not db_path or not os.path.exists(db_path):
-            return {'status': 'error', 'message': 'Invalid or missing snapshot database path'}
-        # --- End Validation ---
+        # --- Basic Setup & Validation ---
+        if not new_location_pairs:
+            return {'status': 'error', 'message': 'No dynamic location pairs provided for insertion.'}
+        if not current_solution or 'routes' not in current_solution or target_vehicle_index >= len(current_solution['routes']):
+            return {'status': 'error', 'message': 'Invalid current solution or target vehicle index.'}
+        if not prepared_data or 'snapshot_id' not in prepared_data:
+             return {'status': 'error', 'message': 'Prepared data or snapshot ID missing.'}
+
+        # --- Ensure OR-Tools is available for Strategy A ---
+        if not HAS_ORTOOLS:
+            print("[ERROR insert_dynamic_locations] Comparison requires OR-Tools for Strategy A (Constrained Insertion), but OR-Tools is not available.")
+            return {
+                'status': 'error',
+                'message': 'Cannot compare insertion strategies: OR-Tools is required but not available.',
+                'recalculation_skipped': True
+            }
 
         conn = None
         try:
-            conn = sqlite3.connect(db_path)
+            # --- Database Connection & Data Extraction ---
+            snapshot_db_path = VRPTestScenarioService._get_snapshot_db_path(prepared_data['snapshot_id'])
+            conn = sqlite3.connect(snapshot_db_path)
             conn.row_factory = sqlite3.Row
 
             original_route = current_solution['routes'][target_vehicle_index]
-            original_warehouse = prepared_data['warehouse']
-            api_key = prepared_data.get('api_key')
-            ors_client = VRPService._get_ors_client()
+            original_stops_sequence = original_route.get('stops', []) # List of stop dicts
+            original_warehouse = current_solution.get('warehouse')
+            if not original_warehouse: raise ValueError("Warehouse data missing from current_solution")
 
-            # --- Identify Current Location and Remaining Stops ---
-            # Check if the original route used checkpoints based on the presence of 'stops'
-            is_checkpoint_route = bool(original_route.get('stops'))
-            # Get the sequence of stops visited (checkpoints or destinations)
-            original_stops_sequence = original_route.get('stops', []) if is_checkpoint_route else original_route.get('path', [])[1:-1] # Exclude warehouse for static
-
-            if insertion_point_index < 0 or insertion_point_index > len(original_stops_sequence):
-                 return {'status': 'error', 'message': f'Invalid insertion point index: {insertion_point_index} for {len(original_stops_sequence)} stops.'}
-
-            # Determine the starting point (current location) for the re-solve
+            # --- Determine Start Location for Subproblems ---
             if insertion_point_index == 0:
-                current_location = original_warehouse.copy() # Start from warehouse
-                current_location['type'] = 'warehouse' # Ensure type
-                original_segment_completed_path = [current_location] # Path segment already done
+                current_location = original_warehouse.copy()
+                current_location['type'] = 'warehouse'
+                original_segment_completed_path_nodes = [current_location] # Nodes visited before insertion point
             else:
-                # Driver is AT the stop corresponding to insertion_point_index - 1 in the sequence
                 current_stop_index_in_list = insertion_point_index - 1
                 if current_stop_index_in_list >= len(original_stops_sequence):
-                     return {'status': 'error', 'message': f'Insertion point index {insertion_point_index} is out of bounds for the route stops.'}
+                    return {'status': 'error', 'message': f'Insertion point index {insertion_point_index} is out of bounds.'}
+                # Make a copy to avoid modifying the original solution data
                 current_location = original_stops_sequence[current_stop_index_in_list].copy()
-                # Ensure lat/lon are present
-                if 'lat' not in current_location or 'lon' not in current_location:
-                     return {'status': 'error', 'message': f'Current stop at index {current_stop_index_in_list} lacks coordinates.'}
-                # Determine the path segment already completed (warehouse up to and including current stop)
-                # The original path includes warehouse at start and end
-                original_segment_completed_path = original_route.get('path', [])[:insertion_point_index + 1]
+                # Get the full path nodes up to and including the current location
+                # The 'path' includes warehouse at start/end, 'stops' usually doesn't
+                original_segment_completed_path_nodes = original_route.get('path', [])[:insertion_point_index + 1]
+                if not original_segment_completed_path_nodes:
+                     # Fallback if path is missing - reconstruct from stops + warehouse
+                     original_segment_completed_path_nodes = [original_warehouse] + original_stops_sequence[:insertion_point_index]
 
-            # Identify remaining original stops for this vehicle (those after the current location)
-            remaining_original_stops = original_stops_sequence[insertion_point_index:]
 
-            print(f"[DEBUG insert_dynamic_locations] Re-solve starts from: {current_location.get('type')} ({current_location['lat']:.4f}, {current_location['lon']:.4f})")
-            print(f"[DEBUG insert_dynamic_locations] Remaining original stops: {len(remaining_original_stops)}")
+            # --- Identify Remaining Original Stops/Clusters ---
+            remaining_original_stops_data = original_stops_sequence[insertion_point_index:] # List of stop dicts
+            remaining_original_clusters = set()
+            for stop in remaining_original_stops_data:
+                # Use helper to query DB based on stop coordinates
+                cluster_id = VRPTestScenarioService._get_cluster_for_location(conn, stop['lat'], stop['lon'])
+                if cluster_id is not None:
+                    remaining_original_clusters.add(cluster_id)
+            print(f"[DEBUG insert_dynamic_locations] Remaining original stops: {len(remaining_original_stops_data)}, Clusters: {remaining_original_clusters}")
 
-            # --- Prepare New Dynamic Destinations ---
-            new_dynamic_stops_for_subproblem = []
-            # Indices relative to the subproblem matrix will be calculated later
 
+            # --- Get New P/D Clusters and Checkpoint Info ---
+            new_dynamic_clusters = set()
+            pickup_checkpoint_indices = [] # Indices in the *full* matrix
+            dropoff_checkpoint_indices = [] # Indices in the *full* matrix
+            full_distance_matrix = prepared_data.get('checkpoint_distance_matrix')
+            full_node_indices_map = prepared_data.get('node_indices_map') # Map index -> location data
+            full_loc_to_idx_map = {f"{loc['lat']:.6f},{loc['lon']:.6f}": idx for idx, loc in full_node_indices_map.items()} if full_node_indices_map else {}
+
+            if full_distance_matrix is None or not full_loc_to_idx_map:
+                 matrix_status = "missing" if full_distance_matrix is None else "present"
+                 map_status = "missing" if not full_loc_to_idx_map else "present"
+                 error_msg = f"Full distance matrix ({matrix_status}) or node mapping ({map_status}) missing from prepared_data."
+                 print(f"[ERROR insert_dynamic_locations] {error_msg}")
+                 raise ValueError(error_msg)
+
+            # Process each new pair to get cluster IDs and selected checkpoint indices
             for pair_idx, pair in enumerate(new_location_pairs):
-                pickup = pair['pickup']
-                dropoff = pair['dropoff']
-                # Ensure in DB (optional here if already done, but safe)
-                VRPTestScenarioService._ensure_location_in_snapshot(conn, pickup['lat'], pickup['lon'], pickup.get('address'), pickup.get('cluster_id'))
-                VRPTestScenarioService._ensure_location_in_snapshot(conn, dropoff['lat'], dropoff['lon'], dropoff.get('address'), dropoff.get('cluster_id'))
+                p_cluster = pair['pickup'].get('cluster_id')
+                d_cluster = pair['dropoff'].get('cluster_id')
+                if p_cluster is not None: new_dynamic_clusters.add(p_cluster)
+                if d_cluster is not None: new_dynamic_clusters.add(d_cluster)
 
-                # Create entries for the subproblem list, include necessary details
-                pickup_stop = {**pickup, 'id': f"DYN_P_{pair_idx}", 'type': 'pickup', 'is_dynamic': True}
-                dropoff_stop = {**dropoff, 'id': f"DYN_D_{pair_idx}", 'type': 'dropoff', 'is_dynamic': True}
-                new_dynamic_stops_for_subproblem.extend([pickup_stop, dropoff_stop])
+                p_cp_data = pair['pickup'].get('selected_checkpoint')
+                d_cp_data = pair['dropoff'].get('selected_checkpoint')
 
-            # --- Determine end_cp_data (End point for the subproblem) ---
-            # This logic determines where the re-solved route should end.
-            # Usually, it's the next stop in the original route, or the warehouse if it was the last stop.
-            warehouse_coords = original_warehouse # Use the full warehouse dict
-            if not warehouse_coords or 'lat' not in warehouse_coords or 'lon' not in warehouse_coords:
-                 raise ValueError("Warehouse coordinates missing or invalid in prepared data.")
+                # --- ADD VALIDATION ---
+                if not p_cp_data or 'lat' not in p_cp_data or 'lon' not in p_cp_data:
+                    raise ValueError(f"Missing or invalid 'selected_checkpoint' data for pickup in pair {pair_idx}.")
+                if not d_cp_data or 'lat' not in d_cp_data or 'lon' not in d_cp_data:
+                    raise ValueError(f"Missing or invalid 'selected_checkpoint' data for dropoff in pair {pair_idx}.")
+                # --- END VALIDATION ---
 
-            end_cp_data = None
-            # Check if there was a next stop in the original sequence
-            if insertion_point_index < len(original_stops_sequence):
-                next_original_stop_in_sequence = original_stops_sequence[insertion_point_index]
-                print(f"[DEBUG insert_dynamic_locations] Subproblem should end at next original stop (Index {insertion_point_index} in sequence): {next_original_stop_in_sequence}")
-                # Find the full data for this stop in the original path (which includes matrix_idx if available)
-                target_lat = next_original_stop_in_sequence['lat']
-                target_lon = next_original_stop_in_sequence['lon']
-                # Search the original full path for this stop
-                end_cp_data = next((p for p in original_route.get('path', []) if
-                                    abs(p['lat'] - target_lat) < 1e-6 and
-                                    abs(p['lon'] - target_lon) < 1e-6), None)
+                p_cp_key = f"{p_cp_data['lat']:.6f},{p_cp_data['lon']:.6f}"
+                d_cp_key = f"{d_cp_data['lat']:.6f},{d_cp_data['lon']:.6f}"
+                print(f"[DEBUG insert_dynamic_locations] Processing Pair {pair_idx}: PKey={p_cp_key}, DKey={d_cp_key}")
 
-                if end_cp_data:
-                    end_cp_data = end_cp_data.copy()
-                    # Mark its type clearly for the subproblem context
-                    end_cp_data['type'] = 'subproblem_end_checkpoint' if end_cp_data.get('type') == 'checkpoint' else 'subproblem_end_destination'
-                else:
-                    print(f"[WARN insert_dynamic_locations] Could not find full data for next stop {insertion_point_index}. Using warehouse as end.")
-                    # Fallback to warehouse if the next stop couldn't be found in the path data
-                    end_cp_data = {'lat': warehouse_coords['lat'], 'lon': warehouse_coords['lon'], 'type': 'warehouse', 'matrix_idx': 0} # Assuming warehouse is index 0
-            else:
-                # If the insertion point was after the last stop, the subproblem ends at the warehouse
-                print("[DEBUG insert_dynamic_locations] Subproblem ends at warehouse (insertion after last stop).")
-                end_cp_data = {'lat': warehouse_coords['lat'], 'lon': warehouse_coords['lon'], 'type': 'warehouse', 'matrix_idx': 0} # Assuming warehouse is index 0
+                p_idx = full_loc_to_idx_map.get(p_cp_key)
+                d_idx = full_loc_to_idx_map.get(d_cp_key)
 
-            if end_cp_data is None or 'lat' not in end_cp_data or 'lon' not in end_cp_data:
-                 print(f"[ERROR insert_dynamic_locations] Failed to determine valid end_cp_data. Value: {end_cp_data}")
-                 raise ValueError("Could not determine valid end location for subproblem.")
-            # --- End end_cp_data determination ---
+                if p_idx is None or d_idx is None:
+                    print(f"[ERROR insert_dynamic_locations] Lookup failed. PKey='{p_cp_key}', DKey='{d_cp_key}'. Found P Index: {p_idx}, Found D Index: {d_idx}")
+                    map_keys_sample = list(full_loc_to_idx_map.keys())[:5]
+                    print(f"  Sample keys in full_loc_to_idx_map: {map_keys_sample} ... (Total: {len(full_loc_to_idx_map)})")
+                    raise ValueError(f"Could not find matrix index for P/D checkpoints: PKey={p_cp_key}, DKey={d_cp_key}")
 
-            # --- Combine Locations for Sub-Problem Matrix ---
-            # Order: Current Location (Start/Depot for subproblem), Remaining Originals, New Dynamics, End Location (end_cp_data)
-            subproblem_locations = [current_location] + remaining_original_stops + new_dynamic_stops_for_subproblem + [end_cp_data]
-            num_sub_locations = len(subproblem_locations)
-            print(f"[DEBUG insert_dynamic_locations] Constructed subproblem_locations list with {num_sub_locations} items.")
+                pickup_checkpoint_indices.append(p_idx)
+                dropoff_checkpoint_indices.append(d_idx)
+                print(f"  Found Indices -> P: {p_idx}, D: {d_idx}")
 
-            if not ors_client:
-                raise ConnectionError("ORS client not available for subproblem distance calculation.")
+            # --- STRATEGY A: Constrained Insertion (using OR-Tools) ---
+            print("[DEBUG insert_dynamic_locations] Calculating Strategy A (Constrained Insertion)...")
+            distance_A = float('inf')
+            solution_A = None
+            intermediate_stops_A = [] # Store the sequence of stops between start and end
             try:
-                print(f"[DEBUG insert_dynamic_locations] Calling _calculate_ors_distance_matrix with list of length {len(subproblem_locations)}")
-                subproblem_matrix = VRPTestScenarioService._calculate_ors_distance_matrix(subproblem_locations, ors_client)
-                if subproblem_matrix is None:
-                    raise ValueError("Failed to calculate ORS matrix for subproblem.")
-                if not isinstance(subproblem_matrix, np.ndarray):
-                     raise ValueError("Calculated subproblem matrix is not a numpy array.")
-                expected_shape = (num_sub_locations, num_sub_locations)
-                if subproblem_matrix.shape != expected_shape:
-                     raise ValueError(f"Calculated subproblem matrix has incorrect shape. Expected {expected_shape}, got {subproblem_matrix.shape}.")
-                print("[DEBUG insert_dynamic_locations] Subproblem ORS matrix calculated successfully and validated.")
-            except Exception as e:
-                raise ConnectionError(f"Failed to get ORS subproblem matrix: {e}") from e
+                # 1. Determine relevant locations for the subproblem
+                #    Includes: current_location (start), warehouse (end),
+                #    ALL checkpoints from remaining_original_stops_data,
+                #    Selected P/D checkpoints (pickup_checkpoint_indices, dropoff_checkpoint_indices)
 
-            # --- Map Indices for Solver Constraints ---
-            subproblem_start_node = 0
-            subproblem_end_node = num_sub_locations - 1
-            pickup_delivery_pairs_subproblem_indices = []
-            dynamic_pickup_indices = {}
-            dynamic_dropoff_indices = {}
-            for idx, loc in enumerate(subproblem_locations):
-                 loc_id = loc.get('id')
-                 if loc.get('is_dynamic'):
-                     if loc.get('type') == 'pickup': dynamic_pickup_indices[loc_id] = idx
-                     elif loc.get('type') == 'dropoff': dynamic_dropoff_indices[loc_id] = idx
-            for pair_idx, pair in enumerate(new_location_pairs):
-                 pickup_id = f"DYN_P_{pair_idx}"
-                 dropoff_id = f"DYN_D_{pair_idx}"
-                 pickup_idx_sub = dynamic_pickup_indices.get(pickup_id)
-                 dropoff_idx_sub = dynamic_dropoff_indices.get(dropoff_id)
-                 if pickup_idx_sub is not None and dropoff_idx_sub is not None:
-                     pickup_delivery_pairs_subproblem_indices.append((pickup_idx_sub, dropoff_idx_sub))
-                 else:
-                      print(f"[WARN insert_dynamic_locations] Could not find subproblem index for dynamic pair {pair_idx} (IDs: {pickup_id}, {dropoff_id})")
+                # --- Build subproblem_A_locations list ---
+                subproblem_A_locations = []
+                subproblem_loc_keys = set() # To track unique locations by key
 
-            # Prepare data for the subproblem solver
-            subproblem_prepared_data = {
-                'warehouse': current_location,
-                'active_routing_checkpoints': subproblem_locations[1:-1],
-                'checkpoint_distance_matrix': subproblem_matrix,
-                'required_clusters': [],
-                'checkpoint_to_clusters': {},
-                'idx_to_cluster_set': {},
-                'subproblem_locations': subproblem_locations
-            }
+                # Add start node (current location)
+                start_loc_copy = current_location.copy()
+                start_loc_key = f"{start_loc_copy['lat']:.6f},{start_loc_copy['lon']:.6f}"
+                start_loc_original_idx = full_loc_to_idx_map.get(start_loc_key)
+                if start_loc_original_idx is not None:
+                    start_loc_copy['original_matrix_idx'] = start_loc_original_idx
+                elif start_loc_copy.get('type') == 'warehouse':
+                     start_loc_copy['original_matrix_idx'] = 0 # Assume warehouse is always 0
+                else:
+                     raise ValueError(f"Cannot determine original matrix index for start location: {start_loc_key}")
+                subproblem_A_locations.append(start_loc_copy)
+                subproblem_loc_keys.add(start_loc_key)
 
-            print("[DEBUG insert_dynamic_locations] Initializing EnhancedVRP for subproblem solve.")
-            subproblem_solver = EnhancedVehicleRoutingProblem(
-                warehouse=current_location, # Use start node as 'warehouse' for subproblem context
-                destinations=[], # Not relevant for checkpoint subproblem
-                num_vehicles=1
-            )
-
-            # --- Determine Subproblem Algorithm ---
-            subproblem_algorithm = algorithm # Start with user's choice
-            if new_location_pairs: # If there are dynamic pairs
-                if algorithm != 'or_tools' and HAS_ORTOOLS:
-                    print(f"[INFO insert_dynamic_locations] Dynamic pairs present. Forcing OR-Tools for subproblem solve to enforce constraints (User selected: {algorithm}).")
-                    subproblem_algorithm = 'or_tools'
-                elif not HAS_ORTOOLS:
-                     # Error handled within EnhancedVRP.solve, but log here too
-                     print("[WARN insert_dynamic_locations] Dynamic pairs present, but OR-Tools is unavailable. Heuristic/2-Opt cannot enforce P/D order.")
-                     # Proceed with user's choice, EnhancedVRP will error if needed or warn critically
-
-            print(f"[DEBUG insert_dynamic_locations] Calling subproblem solver. Algorithm: {subproblem_algorithm}")
-
-            subproblem_options = {
-                'is_subproblem': True,
-                'start_node': subproblem_start_node, # Index within the subproblem matrix/list
-                'end_node': subproblem_end_node, # Index within the subproblem matrix/list
-                'pickup_delivery_pairs': pickup_delivery_pairs_subproblem_indices # Indices within the subproblem matrix/list
-            }
-
-            # Solve the subproblem
-            subproblem_solution = subproblem_solver.solve(subproblem_prepared_data, algorithm=subproblem_algorithm, options=subproblem_options)
-
-            # --- Process Sub-Problem Result ---
-            solver_error_message = subproblem_solution.get('error')
-            if solver_error_message is not None or not subproblem_solution.get('routes'):
-                error_msg_to_report = solver_error_message if solver_error_message is not None else 'Solver failed to find a route for the subproblem.'
-                print(f"[ERROR insert_dynamic_locations] Subproblem solver failed: {error_msg_to_report}")
-                return {'status': 'error', 'message': str(error_msg_to_report)}
-
-            print("[DEBUG insert_dynamic_locations] Subproblem solver succeeded.")
-            subproblem_route = subproblem_solution['routes'][0]
-            subproblem_path = subproblem_route.get('path', [])
-            subproblem_stops = subproblem_route.get('stops', [])
-
-            # --- Stitch Original and New Route Segments ---
-            if not subproblem_path:
-                 raise ValueError("Subproblem solver returned an empty path despite reporting success.")
-
-            new_full_path = original_segment_completed_path + subproblem_path[1:]
-            new_full_stops = original_stops_sequence[:insertion_point_index] + subproblem_stops if is_checkpoint_route else []
-
-            # --- Recalculate Full Stitched Path Distance ---
-            print(f"[DEBUG insert_dynamic_locations] Calculating distance for full stitched path (length {len(new_full_path)}).")
-            new_total_distance_recalc = VRPTestScenarioService._calculate_path_distance(new_full_path, None, ors_client)
-            print(f"[DEBUG insert_dynamic_locations] Full stitched path distance: {new_total_distance_recalc:.2f} km")
-
-            # --- Update the Solution Object ---
-            updated_solution = json.loads(json.dumps(current_solution))
-            updated_solution['routes'][target_vehicle_index]['path'] = new_full_path
-            updated_solution['routes'][target_vehicle_index]['stops'] = new_full_stops
-            updated_solution['routes'][target_vehicle_index]['distance'] = new_total_distance_recalc
-            updated_solution['total_distance'] = sum(r.get('distance', 0) for r in updated_solution['routes'])
-
-            # --- Fetch Detailed Geometry for the Updated Route ---
-            if api_key:
-                print(f"[DEBUG insert_dynamic_locations] Fetching detailed geometry for updated route {target_vehicle_index}...")
-                try:
-                    # --- USE VRPService HELPER ---
-                    updated_detailed_geometry = VRPService.get_detailed_route_geometry(new_full_path, api_key)
-                    # ---
-
-                    if updated_detailed_geometry:
-                        print(f"[DEBUG insert_dynamic_locations]   Updated route {target_vehicle_index} final detailed geometry points: {len(updated_detailed_geometry)}")
-                        updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = updated_detailed_geometry
+                # Add original remaining checkpoints (ensure they exist in the full map)
+                original_remaining_cp_matrix_indices = set()
+                for stop_data in remaining_original_stops_data:
+                    stop_key = f"{stop_data['lat']:.6f},{stop_data['lon']:.6f}"
+                    matrix_idx = full_loc_to_idx_map.get(stop_key)
+                    if matrix_idx is not None:
+                        if stop_key not in subproblem_loc_keys:
+                            loc_data = full_node_indices_map.get(matrix_idx)
+                            if loc_data:
+                                loc_copy = loc_data.copy()
+                                loc_copy['original_matrix_idx'] = matrix_idx # Ensure it's set
+                                subproblem_A_locations.append(loc_copy)
+                                subproblem_loc_keys.add(stop_key)
+                                original_remaining_cp_matrix_indices.add(matrix_idx)
+                            else:
+                                print(f"[WARN Strategy A Setup] Could not find location data for original stop index {matrix_idx}")
+                        else:
+                             # If already added (e.g., start node was the last original stop), still track its index
+                             original_remaining_cp_matrix_indices.add(matrix_idx)
                     else:
-                        print(f"[WARN insert_dynamic_locations]   Failed to generate detailed geometry for updated route {target_vehicle_index}.")
-                        updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = None
+                        print(f"[WARN Strategy A Setup] Could not find matrix index for original remaining stop: {stop_key}")
 
-                except Exception as detail_err:
-                     print(f"[ERROR insert_dynamic_locations] Error fetching detailed geometry for updated route: {detail_err}")
-                     updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = None
+                # Add selected P/D checkpoints (ensure they exist in the full map)
+                pd_matrix_indices = set(pickup_checkpoint_indices + dropoff_checkpoint_indices)
+                for matrix_idx in pd_matrix_indices:
+                    loc_data = full_node_indices_map.get(matrix_idx)
+                    if loc_data:
+                        loc_key = f"{loc_data['lat']:.6f},{loc_data['lon']:.6f}"
+                        if loc_key not in subproblem_loc_keys:
+                            loc_copy = loc_data.copy()
+                            loc_copy['original_matrix_idx'] = matrix_idx # Ensure it's set
+                            loc_copy['is_dynamic'] = True # Mark as part of the dynamic insertion
+                            subproblem_A_locations.append(loc_copy)
+                            subproblem_loc_keys.add(loc_key)
+                    else:
+                        print(f"[WARN Strategy A Setup] Could not find location data for P/D index {matrix_idx}")
+
+                # Add end node (warehouse)
+                end_loc_copy = original_warehouse.copy()
+                end_loc_copy['original_matrix_idx'] = 0 # Assume warehouse is always index 0
+                end_loc_key = f"{end_loc_copy['lat']:.6f},{end_loc_copy['lon']:.6f}"
+                if end_loc_key not in subproblem_loc_keys:
+                    subproblem_A_locations.append(end_loc_copy)
+                    subproblem_loc_keys.add(end_loc_key)
+
+                print(f"[DEBUG Strategy A Setup] Built subproblem_A_locations list with {len(subproblem_A_locations)} unique locations.")
+
+                # --- Verification for original_matrix_idx ---
+                missing_indices = False
+                for idx, loc_data in enumerate(subproblem_A_locations):
+                     if 'original_matrix_idx' not in loc_data:
+                          key = f"{loc_data.get('lat', 0.0):.6f},{loc_data.get('lon', 0.0):.6f}"
+                          print(f"[ERROR Strategy A Setup] Critical: Missing original_matrix_idx for subproblem loc {idx} ({loc_data.get('type')}) with key {key} AFTER construction.")
+                          missing_indices = True
+                if missing_indices:
+                     raise ValueError("Failed to assign original_matrix_idx to all subproblem locations.")
+
+                # 2. Create Subproblem Matrix and Mappings
+                num_sub_A_locations = len(subproblem_A_locations)
+                subproblem_A_matrix = np.zeros((num_sub_A_locations, num_sub_A_locations))
+                subproblem_idx_map = {} # Maps subproblem index -> location data
+                original_matrix_idx_to_subproblem_idx = {} # Maps original matrix index -> subproblem index
+
+                for sub_idx, loc_data in enumerate(subproblem_A_locations):
+                    subproblem_idx_map[sub_idx] = loc_data
+                    original_idx = loc_data.get('original_matrix_idx')
+                    if original_idx is not None:
+                        original_matrix_idx_to_subproblem_idx[original_idx] = sub_idx
+                        for sub_jdx, loc_data_j in enumerate(subproblem_A_locations):
+                            original_jdx = loc_data_j.get('original_matrix_idx')
+                            if original_jdx is not None:
+                                # Use distances from the full matrix
+                                subproblem_A_matrix[sub_idx, sub_jdx] = full_distance_matrix[original_idx, original_jdx]
+                            else:
+                                # Should not happen due to verification, but handle defensively
+                                print(f"[ERROR Strategy A Setup] Missing original index for subproblem location {sub_jdx} during matrix creation.")
+                                subproblem_A_matrix[sub_idx, sub_jdx] = float('inf')
+                    else:
+                         # Should not happen due to verification
+                         print(f"[ERROR Strategy A Setup] Missing original index for subproblem location {sub_idx} during matrix creation.")
+
+                # 3. Determine start/end nodes and constraints in the subproblem context
+                subproblem_start_node_idx = 0 # By construction, start is always index 0
+                subproblem_end_node_idx = num_sub_A_locations - 1 # By construction, end is always last index
+
+                # Map P/D indices to subproblem indices
+                subproblem_pd_pairs = []
+                for i in range(len(pickup_checkpoint_indices)):
+                    p_orig_idx = pickup_checkpoint_indices[i]
+                    d_orig_idx = dropoff_checkpoint_indices[i]
+                    sub_p_idx = original_matrix_idx_to_subproblem_idx.get(p_orig_idx)
+                    sub_d_idx = original_matrix_idx_to_subproblem_idx.get(d_orig_idx)
+                    if sub_p_idx is not None and sub_d_idx is not None:
+                        subproblem_pd_pairs.append((sub_p_idx, sub_d_idx))
+                    else:
+                        raise ValueError(f"Could not map P/D original indices ({p_orig_idx}, {d_orig_idx}) to subproblem indices.")
+
+                # Map original remaining checkpoint indices to subproblem indices (for mandatory visits)
+                mandatory_nodes_subproblem_indices = set()
+                for orig_cp_idx in original_remaining_cp_matrix_indices:
+                    sub_idx = original_matrix_idx_to_subproblem_idx.get(orig_cp_idx)
+                    # Exclude start/end nodes if they happen to be original CPs
+                    if sub_idx is not None and sub_idx != subproblem_start_node_idx and sub_idx != subproblem_end_node_idx:
+                        mandatory_nodes_subproblem_indices.add(sub_idx)
+                    elif sub_idx is None:
+                         print(f"[WARN Strategy A Setup] Original remaining CP index {orig_cp_idx} not found in subproblem map.")
+
+                print(f"[DEBUG Strategy A Setup] Subproblem Start: {subproblem_start_node_idx}, End: {subproblem_end_node_idx}")
+                print(f"[DEBUG Strategy A Setup] Subproblem P/D Pairs: {subproblem_pd_pairs}")
+                print(f"[DEBUG Strategy A Setup] Subproblem Mandatory Nodes (Original Remaining CPs): {list(mandatory_nodes_subproblem_indices)}")
+
+                # 4. Prepare data and options for the solver
+                subproblem_prepared_data = {
+                    'warehouse': subproblem_idx_map[subproblem_start_node_idx], # Use start node as 'warehouse' context for solver
+                    'destinations': list(subproblem_idx_map.values()), # All nodes for context
+                    'active_routing_checkpoints': [loc for idx, loc in subproblem_idx_map.items() if idx != subproblem_start_node_idx and idx != subproblem_end_node_idx],
+                    'checkpoint_distance_matrix': subproblem_A_matrix,
+                    'node_indices_map': subproblem_idx_map, # Use the subproblem map
+                    'idx_to_cluster_set': {}, # Not strictly needed for mandatory visits, but can be built if useful
+                    'required_clusters': [], # Not using cluster coverage for original stops here
+                    'has_clusters': True # Indicate checkpoint logic applies
+                }
+                solver_options = {
+                    'is_subproblem': True,
+                    'start_node': subproblem_start_node_idx,
+                    'end_node': subproblem_end_node_idx,
+                    'pickup_delivery_pairs': subproblem_pd_pairs,
+                    'mandatory_nodes': list(mandatory_nodes_subproblem_indices) # Pass mandatory nodes
+                }
+
+                # 5. Initialize and run the solver
+                # Use num_vehicles=1 for the subproblem
+                subproblem_solver = EnhancedVehicleRoutingProblem(
+                    warehouse=subproblem_prepared_data['warehouse'],
+                    destinations=subproblem_prepared_data['destinations'],
+                    num_vehicles=1
+                )
+                solution_A = subproblem_solver.solve(subproblem_prepared_data, algorithm='or_tools', options=solver_options)
+
+                # 6. Process the result
+                if solution_A and solution_A.get('status') != 'error' and solution_A.get('routes'):
+                    distance_A = solution_A.get('total_distance', float('inf'))
+                    # Extract the sequence of intermediate stops (dictionaries) from the solution's path
+                    # The 'path' in the solution includes start and end, we want stops between them.
+                    subproblem_path = solution_A['routes'][0].get('path', [])
+                    if len(subproblem_path) > 2:
+                         intermediate_stops_A = subproblem_path[1:-1] # Get stop dicts between start and end
+                    else:
+                         intermediate_stops_A = [] # Direct route from start to end
+                    print(f"[DEBUG insert_dynamic_locations] Strategy A Solution Found. Distance: {distance_A:.2f} km, Stops: {len(intermediate_stops_A)}")
+                else:
+                    error_msg = solution_A.get('error', 'Strategy A solver failed') if solution_A else 'Strategy A solver failed'
+                    print(f"[ERROR insert_dynamic_locations] Strategy A failed: {error_msg}")
+                    distance_A = float('inf') # Ensure it doesn't win comparison
+
+            except Exception as e_strat_A:
+                print(f"[ERROR insert_dynamic_locations] Exception during Strategy A calculation: {e_strat_A}")
+                traceback.print_exc()
+                distance_A = float('inf') # Ensure it doesn't win comparison
+
+            # --- STRATEGY B: Append P/D ---
+            print("[DEBUG insert_dynamic_locations] Calculating Strategy B (Append P/D)...")
+            distance_B = float('inf')
+            intermediate_stops_B = []
+            try:
+                # Path: original completed segment + original remaining stops + P checkpoint + D checkpoint + warehouse
+                path_B_nodes = []
+                path_B_nodes.extend(original_segment_completed_path_nodes) # Nodes up to insertion point
+
+                # Add original remaining stops
+                path_B_nodes.extend(remaining_original_stops_data)
+
+                # Add P checkpoint(s) - assuming one pair for simplicity here, adjust if multiple
+                p_cp_node = full_node_indices_map.get(pickup_checkpoint_indices[0])
+                if p_cp_node: path_B_nodes.append(p_cp_node)
+
+                # Add D checkpoint(s)
+                d_cp_node = full_node_indices_map.get(dropoff_checkpoint_indices[0])
+                if d_cp_node: path_B_nodes.append(d_cp_node)
+
+                # Add warehouse at the end
+                path_B_nodes.append(original_warehouse)
+
+                # Calculate distance using the full matrix
+                distance_B = VRPTestScenarioService._calculate_path_distance(
+                    path_B_nodes,
+                    matrix=full_distance_matrix,
+                    node_map=full_node_indices_map
+                )
+                # Extract intermediate stops for Strategy B (all stops between first and last warehouse visit)
+                intermediate_stops_B = path_B_nodes[1:-1]
+                print(f"[DEBUG insert_dynamic_locations] Strategy B Calculated Distance: {distance_B:.2f} km, Stops: {len(intermediate_stops_B)}")
+
+            except Exception as e_strat_B:
+                print(f"[ERROR insert_dynamic_locations] Exception during Strategy B calculation: {e_strat_B}")
+                traceback.print_exc()
+                distance_B = float('inf')
+
+            # --- Comparison and Final Selection ---
+            print(f"[INFO insert_dynamic_locations] Comparison: Strategy A Distance = {distance_A:.2f}, Strategy B Distance = {distance_B:.2f}")
+
+            chosen_strategy = None
+            final_intermediate_stops = []
+            final_distance = float('inf')
+
+            if distance_A <= distance_B:
+                print("[INFO insert_dynamic_locations] Choosing Strategy A (Constrained Insertion).")
+                chosen_strategy = 'A'
+                final_intermediate_stops = intermediate_stops_A
+                final_distance = distance_A # Use distance calculated by subproblem solver
             else:
-                 print("[WARN insert_dynamic_locations] No API key, skipping detailed geometry fetch for updated route.")
+                print("[INFO insert_dynamic_locations] Choosing Strategy B (Append P/D).")
+                chosen_strategy = 'B'
+                final_intermediate_stops = intermediate_stops_B
+                final_distance = distance_B # Use distance calculated for the full B path
+
+            # --- Construct Updated Solution ---
+            updated_solution = json.loads(json.dumps(current_solution, cls=NumpyEncoder)) 
+            new_full_stops = original_segment_completed_path_nodes[1:] + final_intermediate_stops # Combine history + chosen segment (exclude first warehouse)
+            new_full_path = [original_warehouse] + new_full_stops + [original_warehouse] # Add warehouse at start/end
+
+            # Recalculate final distance using the chosen full path for consistency
+            final_recalculated_distance = VRPTestScenarioService._calculate_path_distance(
+                 new_full_path,
+                 matrix=full_distance_matrix,
+                 node_map=full_node_indices_map,
+                 api_key=prepared_data.get('api_key') # Pass API key for potential ORS fallback
+            )
+            print(f"[DEBUG insert_dynamic_locations] Final stitched path distance (Recalculated): {final_recalculated_distance:.2f} km")
+
+
+            # Update the specific vehicle's route
+            updated_solution['routes'][target_vehicle_index]['stops'] = new_full_stops
+            updated_solution['routes'][target_vehicle_index]['path'] = new_full_path
+            updated_solution['routes'][target_vehicle_index]['distance'] = final_recalculated_distance
+            # Update total distance if only one vehicle, otherwise recalculate sum
+            if len(updated_solution['routes']) == 1:
+                 updated_solution['total_distance'] = final_recalculated_distance
+            else:
+                 updated_solution['total_distance'] = sum(r.get('distance', 0) for r in updated_solution['routes'])
+
+
+            # Fetch Detailed Geometry for the final chosen path
+            api_key_geom = prepared_data.get('api_key')
+            if api_key_geom and new_full_path:
+                 try:
+                     detailed_geometry = VRPService.get_detailed_route_geometry(new_full_path, api_key=api_key_geom)
+                     updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = detailed_geometry # Use correct key
+                     print("[DEBUG insert_dynamic_locations] Successfully fetched detailed geometry for updated route.")
+                 except Exception as geom_e:
+                     print(f"[WARN insert_dynamic_locations] Failed to fetch detailed geometry for updated route: {geom_e}")
+                     updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = None
+            elif not api_key_geom:
+                 print("[WARN insert_dynamic_locations] No API key found in prepared_data, skipping detailed geometry fetch for updated route.")
                  updated_solution['routes'][target_vehicle_index]['detailed_path_geometry'] = None
-            # --- End Detailed Geometry Fetch ---
 
-            # Add metadata
-            computation_time = time.time() - start_time
-            updated_solution['execution_time_ms'] = int(computation_time * 1000) # Overall time for insertion
-            updated_solution['is_dynamic_update'] = True
-            updated_solution['dynamic_pairs_count'] = len(new_location_pairs)
-            if 'test_info' not in updated_solution: updated_solution['test_info'] = {}
-            updated_solution['test_info']['timestamp'] = datetime.now().isoformat()
-            updated_solution['status'] = 'success' # Ensure status is success
+            # Add information about the chosen strategy to the result
+            updated_solution['test_info'] = updated_solution.get('test_info', {})
+            updated_solution['test_info']['dynamic_insertion_strategy'] = chosen_strategy
+            updated_solution['test_info']['strategy_A_distance'] = distance_A if distance_A != float('inf') else None
+            updated_solution['test_info']['strategy_B_distance'] = distance_B if distance_B != float('inf') else None
+            updated_solution['test_info']['original_warehouse'] = original_warehouse # Store original warehouse context
 
-            print(f"[DEBUG insert_dynamic_locations] Route stitching complete. New total distance: {updated_solution['total_distance']:.2f} km")
+            updated_solution['status'] = 'success'
             return updated_solution
 
-        except (ValueError, ConnectionError, RuntimeError, sqlite3.Error) as e:
-            print(f"[ERROR insert_dynamic_locations] Handled error during subproblem solve/stitch: {e}")
-            traceback.print_exc()
-            return {'status': 'error', 'message': f"Error during dynamic insertion: {str(e)}"}
         except Exception as e:
-            print(f"[ERROR insert_dynamic_locations] Unexpected error: {e}")
+            print(f"[ERROR insert_dynamic_locations] General exception during comparison: {e}")
             traceback.print_exc()
-            return {'status': 'error', 'message': f"Unexpected error during dynamic insertion: {str(e)}"}
+            # Ensure connection is closed if opened
+            return {'status': 'error', 'message': f'Error during dynamic insertion comparison: {e}'}
         finally:
             if conn:
-                conn.close()
+                try: conn.close()
+                except: pass
+            end_time_comparison = time.time()
+            print(f"[INFO insert_dynamic_locations] Comparison and update finished in {end_time_comparison - start_time_comparison:.4f} seconds.")
 
     @staticmethod
-    def _calculate_path_distance(path, matrix=None, ors_client=None):
-        """
-        Calculates the distance of a path (list of location dicts) using ORS directions or Haversine fallback.
-        """
-        if not path or len(path) < 2:
+    def _calculate_path_distance(path_nodes, matrix=None, node_map=None, ors_client=None, api_key=None): # Add api_key
+        """Calculates distance for a path given as list of node dicts."""
+        total_distance = 0.0
+        if not path_nodes or len(path_nodes) < 2:
             return 0.0
 
-        total_distance = 0.0
+        if matrix is not None and node_map is not None:
+            loc_to_idx = {f"{loc['lat']:.6f},{loc['lon']:.6f}": idx for idx, loc in node_map.items()}
+            indices = []
+            for node in path_nodes:
+                key = f"{node['lat']:.6f},{node['lon']:.6f}"
+                idx = loc_to_idx.get(key)
+                if idx is None:
+                    print(f"[WARN _calculate_path_distance] Could not find matrix index for node: {node}")
+                    return float('inf')
+                indices.append(idx)
 
-        if ors_client:
-            print(f"[DEBUG _calculate_path_distance] Calculating distance for {len(path)} points using ORS directions API.")
-            try:
-                # Iterate through segments of the path
-                for i in range(len(path) - 1):
-                    p1 = path[i]
-                    p2 = path[i+1]
+            for i in range(len(indices) - 1):
+                idx1, idx2 = indices[i], indices[i+1]
+                if 0 <= idx1 < matrix.shape[0] and 0 <= idx2 < matrix.shape[0]:
+                    total_distance += matrix[idx1][idx2]
+                else:
+                    print(f"[ERROR _calculate_path_distance] Matrix index out of bounds: {idx1}, {idx2}")
+                    return float('inf')
+            return total_distance
 
-                    # Basic validation of points
-                    if not (p1 and p2 and 'lat' in p1 and 'lon' in p1 and 'lat' in p2 and 'lon' in p2):
-                        print(f"[WARN _calculate_path_distance] Invalid or incomplete coordinates in path segment {i}: {p1}, {p2}. Skipping segment.")
-                        continue # Skip this segment
+        elif ors_client or api_key:
+             print("[WARN _calculate_path_distance] Matrix/NodeMap missing or failed, falling back to ORS segment calls.")
+             local_ors_client = ors_client
+             if not local_ors_client and api_key:
+                  local_ors_client = VRPService._get_ors_client(api_key)
 
-                    # Ensure coordinates are floats
-                    try:
-                        coords = [
-                            [float(p1['lon']), float(p1['lat'])],
-                            [float(p2['lon']), float(p2['lat'])]
-                        ]
-                    except (ValueError, TypeError) as coord_err:
-                         print(f"[WARN _calculate_path_distance] Coordinate conversion error in segment {i}: {coord_err}. Skipping segment.")
-                         continue # Skip this segment
+             if not local_ors_client:
+                  print("[ERROR _calculate_path_distance] ORS client unavailable for fallback calculation.")
+                  return float('inf')
 
-                    # Call ORS Directions API for the segment
-                    try:
-                        # Request only distance, no geometry or instructions for efficiency
-                        route_info = ors_client.directions(
-                            coordinates=coords,
-                            profile='driving-car',
-                            format='json',
-                            instructions='false',
-                            geometry='false'
-                        )
-                        # --- CORRECT RESPONSE PARSING ---
-                        if (route_info and 'routes' in route_info and
-                                len(route_info['routes']) > 0 and
-                                'summary' in route_info['routes'][0] and
-                                'distance' in route_info['routes'][0]['summary']):
+             total_distance = 0.0
+             for i in range(len(path_nodes) - 1):
+                  start_node = path_nodes[i]
+                  end_node = path_nodes[i+1]
+                  try:
+                       coords = [[start_node['lon'], start_node['lat']], [end_node['lon'], end_node['lat']]]
+                       route = local_ors_client.directions(coordinates=coords, profile='driving-car', format='json')
+                       segment_distance = route['routes'][0]['summary']['distance'] / 1000.0 # Convert meters to km
+                       total_distance += segment_distance
+                  except Exception as e:
+                       print(f"[ERROR _calculate_path_distance] ORS fallback failed for segment {i+1}: {e}")
+                       dist_hav = VRPTestScenarioService._haversine_distance(start_node['lat'], start_node['lon'], end_node['lat'], end_node['lon'])
+                       print(f"[WARN _calculate_path_distance] Using Haversine fallback for segment {i+1}: {dist_hav:.2f} km")
+                       total_distance += dist_hav
+             return total_distance
 
-                            segment_distance = route_info['routes'][0]['summary']['distance'] / 1000.0 # Convert meters to km
-                            total_distance += segment_distance
-                            # print(f"[DEBUG _calculate_path_distance] Segment {i} distance: {segment_distance:.3f} km") # Optional detailed log
-                        else:
-                            # Log unexpected response and fallback for this segment
-                            print(f"[WARN _calculate_path_distance] Unexpected ORS directions response structure for segment {i}. Response: {route_info}. Falling back to Haversine for segment.")
-                            total_distance += VRPTestScenarioService._haversine_distance(p1['lat'], p1['lon'], p2['lat'], p2['lon'])
-                        # --- END CORRECT RESPONSE PARSING ---
-
-                    except Exception as ors_api_err:
-                         print(f"[WARN _calculate_path_distance] ORS directions API error for segment {i}: {ors_api_err}. Falling back to Haversine for segment.")
-                         total_distance += VRPTestScenarioService._haversine_distance(p1['lat'], p1['lon'], p2['lat'], p2['lon'])
-
-                print(f"[DEBUG _calculate_path_distance] Total ORS calculated distance: {total_distance:.3f} km")
-                return total_distance
-
-            except Exception as e:
-                # Catch-all for unexpected errors during ORS calculation loop
-                print(f"[ERROR _calculate_path_distance] Unexpected error during ORS distance calculation loop: {e}. Falling back to Haversine for entire path.")
-                # Fallback to calculating Haversine for the whole path if ORS fails catastrophically
-
-        # --- Fallback to Haversine if ORS client not provided or failed ---
-        print("[DEBUG _calculate_path_distance] Using Haversine distance calculation (fallback).")
-        total_distance = 0.0 # Recalculate from scratch
-        for i in range(len(path) - 1):
-            p1 = path[i]
-            p2 = path[i+1]
-            if p1 and p2 and 'lat' in p1 and 'lon' in p1 and 'lat' in p2 and 'lon' in p2:
-                try:
-                    total_distance += VRPTestScenarioService._haversine_distance(
-                        float(p1['lat']), float(p1['lon']),
-                        float(p2['lat']), float(p2['lon'])
-                    )
-                except (ValueError, TypeError):
-                     print(f"[WARN _calculate_path_distance] Haversine fallback: Coordinate conversion error in segment {i}. Skipping.")
-                     continue
-            else:
-                 print(f"[WARN _calculate_path_distance] Haversine fallback: Invalid coordinates in segment {i}. Skipping.")
-
-        print(f"[DEBUG _calculate_path_distance] Total Haversine calculated distance: {total_distance:.3f} km")
-        return total_distance
+        else:
+             print("[WARN _calculate_path_distance] Matrix/NodeMap and ORS client missing, falling back to Haversine.")
+             total_distance = 0.0
+             for i in range(len(path_nodes) - 1):
+                  start_node = path_nodes[i]
+                  end_node = path_nodes[i+1]
+                  total_distance += VRPTestScenarioService._haversine_distance(start_node['lat'], start_node['lon'], end_node['lat'], end_node['lon'])
+             return total_distance
 
     @staticmethod
     def _ensure_location_in_snapshot(conn, lat, lon, address, cluster_id):
@@ -922,3 +1025,81 @@ class VRPTestScenarioService:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         distance = R * c
         return distance
+
+    @staticmethod
+    def _get_cluster_for_location(conn, lat, lon):
+        """
+        Query the snapshot DB to find the cluster_id for given coordinates
+        by joining locations and location_clusters tables.
+        """
+        # Ensure lat/lon are floats for reliable matching
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (ValueError, TypeError):
+            print(f"[WARN _get_cluster_for_location] Invalid lat/lon format: ({lat}, {lon}). Cannot find cluster.")
+            return None
+
+        # Query using JOIN
+        query = """
+            SELECT lc.cluster_id
+            FROM locations l
+            JOIN location_clusters lc ON l.id = lc.location_id
+            WHERE l.lat = ? AND l.lon = ?
+            LIMIT 1
+        """
+        try:
+            cursor = conn.execute(query, (lat_f, lon_f))
+            row = cursor.fetchone()
+            if row:
+                return row['cluster_id']
+            else:
+                return None
+        except sqlite3.Error as e:
+            print(f"[ERROR _get_cluster_for_location] Database error querying cluster for ({lat_f}, {lon_f}): {e}")
+            return None
+        
+    @staticmethod
+    def _get_snapshot_db_path(snapshot_id):
+        """Helper to construct the full path to the snapshot DB."""
+        # Ensure snapshot_id has the correct extension for file path
+        if not snapshot_id.endswith('.sqlite'):
+            db_snapshot_filename = f"{snapshot_id}.sqlite"
+        else:
+            db_snapshot_filename = snapshot_id
+
+        try:
+             from flask import current_app
+             base_path = os.path.join(current_app.root_path, "vrp_test_data")
+        except ImportError:
+             base_path = os.path.join(os.path.dirname(__file__), '..', 'vrp_test_data')
+             print(f"[WARN _get_snapshot_db_path] Not in Flask context, using relative path: {base_path}")
+
+        if not os.path.isdir(base_path):
+             raise FileNotFoundError(f"Snapshot directory not found: {base_path}")
+
+        # Basic validation to prevent path traversal
+        if '..' in db_snapshot_filename or '/' in db_snapshot_filename or '\\' in db_snapshot_filename:
+             raise ValueError(f"Invalid snapshot filename format: {db_snapshot_filename}")
+
+        snapshot_path = os.path.join(base_path, db_snapshot_filename)
+        if not os.path.isfile(snapshot_path):
+             raise FileNotFoundError(f"Snapshot database file not found: {snapshot_path}")
+        return snapshot_path
+    
+    @staticmethod
+    def _get_street_stem(street_name):
+        """
+        Extracts the base part of a street name, removing specific suffixes/numbers.
+        Example: 'Jalan Setia Indah U13/9W' -> 'Jalan Setia Indah'
+                'Persiaran Setia Wawasan' -> 'Persiaran Setia Wawasan'
+        Adjust the regex pattern based on observed street name formats.
+        """
+        if not street_name:
+            return None
+        # Pattern attempts to match common endings like U13/..., /..., numbers, letters after slashes/spaces
+        # This might need refinement based on your specific data patterns
+        match = re.match(r"^(.*?)(?:\s+(?:U\d+|\d+)\/\S*|\s+\d+[A-Z]?\s*|\s+\/\s*\S+)?$", street_name.strip())
+        if match and match.group(1):
+            return match.group(1).strip()
+        return street_name.strip()

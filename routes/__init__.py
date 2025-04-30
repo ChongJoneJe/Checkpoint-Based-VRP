@@ -9,7 +9,6 @@ vrp_bp = Blueprint('vrp', __name__, url_prefix='/vrp')
 all_blueprints = [main_bp, locations_bp, presets_bp, vrp_bp]
 
 def setup_routes(app):
-    # Import blueprints
     from routes.main import main_bp
     from routes.presets import presets_bp
     from routes.locations import locations_bp
@@ -19,7 +18,6 @@ def setup_routes(app):
     from routes.checkpoints import checkpoints_bp
     from routes.vrp_testing import vrp_testing_bp
     
-    # Register blueprints with consistent URL prefixes
     app.register_blueprint(main_bp)
     app.register_blueprint(presets_bp, url_prefix='/presets')
     app.register_blueprint(locations_bp, url_prefix='/locations')
