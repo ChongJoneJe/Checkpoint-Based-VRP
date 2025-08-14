@@ -567,7 +567,7 @@ function displayTestResults(solution, testType) {
     if (mapElement) {
         mapElement.innerHTML = ''; 
     }
-e
+    
     const isCheckpointRoute = (testType === 'checkpoints' || testType === 'dynamic') || 
                              (solution.routes && solution.routes[0]?.stops && 
                               solution.routes[0].stops[0]?.type === 'checkpoint');
